@@ -940,7 +940,7 @@ function showResult(emp, res) {
     else if (ev.type === 'in') badge = s.late ? `<span class="badge b-warn">สาย ${s.late} นาที</span>` : '<span class="badge b-ok">ตรงเวลา</span>';
     else badge = s.otMin ? `<span class="badge b-info">OT เย็น ${fmtMin(s.otMin)}</span>` : '<span class="badge b-info">ออกงาน</span>';
     $('#kResSub').innerHTML = `${typ} ${hm(ev.time)} น. ${badge}`;
-    setStatus(st, 'ok', `✓ บันทึกเวลา${typ}สำเร็จ`);
+    setStatus(st, 'ok', ev.type === 'lunch' ? '✓ บันทึก OT เที่ยงสำเร็จ' : `✓ บันทึกเวลา${typ}สำเร็จ`);
     beep(true);
     speak(ev.type === 'in' ? `สวัสดีค่ะ คุณ${emp.name}` : ev.type === 'lunch' ? `บันทึกโอทีเที่ยง คุณ${emp.name}` : `ขอบคุณค่ะ คุณ${emp.name} เดินทางปลอดภัยนะคะ`);
     renderKioskSide();
