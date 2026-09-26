@@ -1,10 +1,12 @@
 -- Face attendance app schema (applied to Supabase as migrations
--- att_face_attendance_schema + att_move_is_staff_to_private_schema + att_drop_employee_code).
+-- att_face_attendance_schema + att_move_is_staff_to_private_schema + att_drop_employee_code + att_roles_hr_and_kiosk).
+-- Roles: hr = everything; kiosk = read what scanning needs + add scans only.
 -- Only users listed in att_staff can read or write anything.
 
 create table public.att_staff (
   user_id uuid primary key references auth.users(id) on delete cascade,
   email text,
+  role text not null default 'hr' check (role in ('hr','kiosk')),
   created_at timestamptz not null default now()
 );
 
@@ -71,14 +73,36 @@ alter table public.att_calendar enable row level security;
 alter table public.att_settings enable row level security;
 
 create policy att_staff_self on public.att_staff for select to authenticated using (user_id = (select auth.uid()));
-create policy att_employees_staff on public.att_employees for all to authenticated
-  using ((select att_private.is_staff())) with check ((select att_private.is_staff()));
-create policy att_events_staff on public.att_events for all to authenticated
-  using ((select att_private.is_staff())) with check ((select att_private.is_staff()));
-create policy att_calendar_staff on public.att_calendar for all to authenticated
-  using ((select att_private.is_staff())) with check ((select att_private.is_staff()));
-create policy att_settings_staff on public.att_settings for all to authenticated
-  using ((select att_private.is_staff())) with check ((select att_private.is_staff()));
+create or replace function att_private.is_hr()
+returns boolean
+language sql
+stable
+security definer
+set search_path = ''
+as $$
+  select exists (select 1 from public.att_staff where user_id = (select auth.uid()) and role = 'hr');
+$$;
+revoke execute on function att_private.is_hr() from public, anon;
+grant execute on function att_private.is_hr() to authenticated;
+
+create policy att_employees_read on public.att_employees for select to authenticated using ((select att_private.is_staff()));
+create policy att_employees_insert on public.att_employees for insert to authenticated with check ((select att_private.is_hr()));
+create policy att_employees_update on public.att_employees for update to authenticated using ((select att_private.is_hr())) with check ((select att_private.is_hr()));
+create policy att_employees_delete on public.att_employees for delete to authenticated using ((select att_private.is_hr()));
+
+create policy att_events_read on public.att_events for select to authenticated using (
+  (select att_private.is_hr()) or ((select att_private.is_staff()) and time > now() - interval '3 days'));
+create policy att_events_insert on public.att_events for insert to authenticated with check (
+  (select att_private.is_hr())
+  or ((select att_private.is_staff()) and source in ('face','manual')
+      and time > now() - interval '14 days' and time < now() + interval '1 hour'));
+create policy att_events_update on public.att_events for update to authenticated using ((select att_private.is_hr())) with check ((select att_private.is_hr()));
+create policy att_events_delete on public.att_events for delete to authenticated using ((select att_private.is_hr()));
+
+create policy att_calendar_read on public.att_calendar for select to authenticated using ((select att_private.is_staff()));
+create policy att_calendar_write on public.att_calendar for all to authenticated using ((select att_private.is_hr())) with check ((select att_private.is_hr()));
+create policy att_settings_read on public.att_settings for select to authenticated using ((select att_private.is_staff()));
+create policy att_settings_write on public.att_settings for all to authenticated using ((select att_private.is_hr())) with check ((select att_private.is_hr()));
 
 revoke all on public.att_staff, public.att_employees, public.att_events, public.att_calendar, public.att_settings from anon;
 

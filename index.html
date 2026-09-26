@@ -159,6 +159,8 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 .lunch-banner{margin-top:12px;padding:10px 14px;border-radius:10px;background:var(--info-bg);color:var(--info);display:none;align-items:center;gap:10px;flex-wrap:wrap}
 .lunch-banner.show{display:flex}
 .lunch-banner b{flex:1}
+body.role-kiosk #nav button:not([data-view="kiosk"]){display:none}
+.role-tag{font-size:12px;font-weight:600;padding:2px 10px;border-radius:99px;background:var(--surface-2);color:var(--muted);white-space:nowrap}
 .pick{display:flex;flex-direction:column;gap:4px;max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px}
 .pick label{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:8px;cursor:pointer}
 .pick label:has(input:checked){background:var(--ok-bg)}
@@ -187,11 +189,11 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
   <form class="card login" id="loginForm">
     <div class="brand"><span class="dot"></span>ระบบลงเวลาใบหน้า</div>
     <h2>เข้าสู่ระบบ</h2>
-    <label class="f"><span>อีเมล</span><input type="email" id="lEmail" required autocomplete="username"></label>
+    <label class="f"><span>ชื่อผู้ใช้หรืออีเมล</span><input type="text" id="lEmail" required autocomplete="username" autocapitalize="none" spellcheck="false"></label>
     <label class="f"><span>รหัสผ่าน</span><input type="password" id="lPass" required autocomplete="current-password"></label>
     <div class="status err" id="loginErr" style="display:none;font-size:14px;min-height:0;margin:0 0 12px"></div>
     <button class="btn primary" type="submit" id="btnLogin" style="width:100%">เข้าสู่ระบบ</button>
-    <p class="small muted" style="margin:12px 0 0">บัญชีผู้ใช้สร้างโดยผู้ดูแลระบบใน Supabase</p>
+    <p class="small muted" style="margin:12px 0 0">บัญชีผู้ใช้สร้างโดย HR ที่เมนู ตั้งค่า → ผู้ใช้งานและรหัสผ่าน</p>
   </form>
 </div>
 
@@ -209,6 +211,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     <div class="userbox">
       <span class="sync ok" id="sync">ออนไลน์</span>
       <span class="small muted" id="userEmail"></span>
+      <span class="role-tag" id="roleTag"></span>
       <button class="btn sm" id="btnInstall" hidden>ติดตั้งแอป</button>
       <button class="btn sm" id="btnLogout">ออกจากระบบ</button>
       <span class="clock-sm" id="clockSm"></span>
@@ -414,6 +417,23 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
         </div>
       </div>
     </div>
+    <div class="card" style="margin-top:20px">
+      <h2>ผู้ใช้งานและรหัสผ่าน</h2>
+      <p class="muted small" style="margin-top:0"><b>HR</b> เข้าได้ทุกเมนู · <b>เครื่องสแกนอย่างเดียว</b> เห็นแค่หน้าสแกน ใช้กับแท็บเล็ตหน้างาน ดูรายงานหรือแก้ตั้งค่าไม่ได้</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>ชื่อผู้ใช้</th><th>ประเภท</th><th>สร้างเมื่อ</th><th></th></tr></thead>
+          <tbody id="uBody"></tbody>
+        </table>
+      </div>
+      <h3>เพิ่มบัญชี</h3>
+      <form class="toolbar" id="uForm" autocomplete="off">
+        <label class="f"><span>ชื่อผู้ใช้ (อังกฤษ/ตัวเลข) หรืออีเมล</span><input type="text" id="uLogin" required placeholder="เช่น scan1" autocapitalize="none" spellcheck="false"></label>
+        <label class="f"><span>รหัสผ่าน (8 ตัวขึ้นไป)</span><input type="password" id="uPass" required minlength="8" autocomplete="new-password"></label>
+        <label class="f"><span>ประเภท</span><select id="uRole"><option value="kiosk">เครื่องสแกนอย่างเดียว</option><option value="hr">HR (ทุกเมนู)</option></select></label>
+        <button class="btn primary" type="submit" id="uCreate">เพิ่มบัญชี</button>
+      </form>
+    </div>
   </section>
 </main>
 
@@ -437,6 +457,19 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     <label class="f"><span>กำหนดวันนี้เป็น</span>
       <select id="dayType"><option value="">ตามค่าประจำสัปดาห์</option><option value="work">วันทำงาน</option><option value="off">วันหยุดโรงงาน (นักขัตฤกษ์ / หยุดบริษัท)</option></select></label>
     <label class="f"><span>หมายเหตุ</span><input type="text" id="dayNote" placeholder="เช่น ออเดอร์ลูกค้า A, วันแม่แห่งชาติ" autocomplete="off"></label>
+    <div class="actions" style="justify-content:flex-end">
+      <button class="btn" value="cancel" formnovalidate>ยกเลิก</button>
+      <button class="btn primary" value="ok">บันทึก</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="pwDlg">
+  <form method="dialog" id="pwForm">
+    <h2 style="margin:0 0 4px;font-size:17px">เปลี่ยนรหัสผ่าน</h2>
+    <div class="muted small" style="margin-bottom:12px" id="pwWho"></div>
+    <label class="f"><span>รหัสผ่านใหม่ (8 ตัวขึ้นไป)</span><input type="password" id="pwNew" minlength="8" autocomplete="new-password"></label>
+    <label class="f"><span>ยืนยันรหัสผ่านใหม่</span><input type="password" id="pwNew2" minlength="8" autocomplete="new-password"></label>
     <div class="actions" style="justify-content:flex-end">
       <button class="btn" value="cancel" formnovalidate>ยกเลิก</button>
       <button class="btn primary" value="ok">บันทึก</button>
@@ -478,6 +511,7 @@ let events = [];      // only the months that have been loaded (see ensureMonth)
 let settings = { ...DEFAULTS };
 let calendar = {};    // { 'YYYY-MM-DD': { type: 'work'|'off', note } } overrides the weekly pattern
 let currentUser = null;
+let currentRole = 'kiosk';   // 'hr' or 'kiosk' (scan only); the database enforces the same rules
 const DOW = ['อาทิตย์', 'จันทร์', 'อังคาร', 'พุธ', 'พฤหัสบดี', 'ศุกร์', 'เสาร์'];
 const DOW_SHORT = ['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'];
 const empById = id => employees.find(e => e.id === id);
@@ -571,7 +605,7 @@ async function flushOutbox() {
   flushing = true;
   const batch = outbox.slice(0, 200);
   try {
-    const { error } = await sb.from('att_events').upsert(batch);
+    const { error } = await sb.from('att_events').upsert(batch, { onConflict: 'id', ignoreDuplicates: true });
     if (error) throw error;
     const sent = new Set(batch.map(r => r.id));
     outbox = outbox.filter(r => !sent.has(r.id)); store.set('outbox', outbox);
@@ -1306,6 +1340,7 @@ $('#btnFull').addEventListener('click', () => {
 let currentView = 'kiosk';
 function showView(name) {
   if (name === currentView) return;
+  if (currentRole !== 'hr' && name !== 'kiosk') return;
   if (currentView === 'kiosk') { stopKiosk(); stopCamera(); }
   if (currentView === 'employees' && enrolling) { stopEnroll(); }
   currentView = name;
@@ -1315,7 +1350,7 @@ function showView(name) {
   if (name === 'employees') renderEmployees();
   if (name === 'reports') renderReports();
   if (name === 'calendar') renderCalendar();
-  if (name === 'settings') renderSettings();
+  if (name === 'settings') { renderSettings(); renderUsers(); }
 }
 $('#nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) showView(b.dataset.view); });
 function tick() {
@@ -1330,6 +1365,81 @@ function tick() {
 setInterval(tick, 1000); tick();
 $('#rDate').value = dayKey(Date.now());
 $('#rMonth').value = dayKey(Date.now()).slice(0, 7);
+
+/* ---------- users & passwords (HR only; enforced by the att-admin edge function) ---------- */
+const LOGIN_DOMAIN = '@att.local';
+const toLoginEmail = v => { v = v.trim().toLowerCase(); return v.includes('@') ? v : v + LOGIN_DOMAIN; };
+const loginName = email => (email || '').endsWith(LOGIN_DOMAIN) ? email.slice(0, -LOGIN_DOMAIN.length) : (email || '');
+const ROLE_LABEL = { hr: 'HR (ทุกเมนู)', kiosk: 'เครื่องสแกนอย่างเดียว' };
+async function adminCall(body) {
+  const { data, error } = await sb.functions.invoke('att-admin', { body });
+  if (error) {
+    let msg = error.message;
+    try { msg = (await error.context.json()).error || msg; } catch {}
+    throw new Error(msg);
+  }
+  return data;
+}
+async function renderUsers() {
+  $('#uBody').innerHTML = '<tr><td colspan="4" class="empty">กำลังโหลด…</td></tr>';
+  try {
+    const { users, me } = await adminCall({ action: 'list' });
+    $('#uBody').innerHTML = users.map(u => {
+      const self = u.user_id === me, other = u.role === 'hr' ? 'kiosk' : 'hr';
+      return `<tr><td>${esc(loginName(u.email))}${self ? ' <span class="badge b-info">คุณ</span>' : ''}</td>
+        <td><span class="badge ${u.role === 'hr' ? 'b-ok' : 'b-warn'}">${ROLE_LABEL[u.role]}</span></td>
+        <td>${new Date(u.created_at).toLocaleDateString('th-TH')}</td>
+        <td><button class="btn sm" data-upw="${u.user_id}" data-uname="${esc(loginName(u.email))}">เปลี่ยนรหัสผ่าน</button>
+        ${self ? '' : `<button class="btn sm" data-urole="${u.user_id}" data-to="${other}">เปลี่ยนเป็น${other === 'hr' ? ' HR' : 'เครื่องสแกน'}</button>
+        <button class="btn sm danger" data-urevoke="${u.user_id}" data-uname="${esc(loginName(u.email))}">ลบสิทธิ์</button>`}</td></tr>`;
+    }).join('');
+  } catch (e) {
+    $('#uBody').innerHTML = `<tr><td colspan="4" class="empty">โหลดรายชื่อผู้ใช้ไม่สำเร็จ: ${esc(e.message)}</td></tr>`;
+  }
+}
+$('#uForm').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  $('#uCreate').disabled = true;
+  try {
+    await adminCall({ action: 'create', login: $('#uLogin').value, password: $('#uPass').value, role: $('#uRole').value });
+    toast(`เพิ่มบัญชี ${$('#uLogin').value.trim()} แล้ว`, 'ok');
+    $('#uForm').reset();
+    renderUsers();
+  } catch (e) { toast('เพิ่มบัญชีไม่สำเร็จ: ' + e.message, 'err'); }
+  $('#uPass').value = '';
+  $('#uCreate').disabled = false;
+});
+let pwUserId = null;
+$('#uBody').addEventListener('click', async ev => {
+  const pw = ev.target.closest('[data-upw]'), role = ev.target.closest('[data-urole]'), rv = ev.target.closest('[data-urevoke]');
+  try {
+    if (pw) {
+      pwUserId = pw.dataset.upw;
+      $('#pwWho').textContent = 'บัญชี: ' + pw.dataset.uname;
+      $('#pwNew').value = ''; $('#pwNew2').value = '';
+      $('#pwDlg').showModal();
+    }
+    if (role) {
+      if (!confirm(`เปลี่ยนบัญชีนี้เป็น "${ROLE_LABEL[role.dataset.to]}"?`)) return;
+      await adminCall({ action: 'role', user_id: role.dataset.urole, role: role.dataset.to });
+      toast('เปลี่ยนประเภทบัญชีแล้ว (มีผลเมื่อเครื่องนั้นเปิดแอปใหม่)', 'ok'); renderUsers();
+    }
+    if (rv) {
+      if (!confirm(`ลบสิทธิ์บัญชี "${rv.dataset.uname}"? บัญชีนี้จะเข้าใช้แอปไม่ได้อีก`)) return;
+      await adminCall({ action: 'revoke', user_id: rv.dataset.urevoke });
+      toast('ลบสิทธิ์แล้ว', 'ok'); renderUsers();
+    }
+  } catch (e) { toast(e.message, 'err'); }
+});
+$('#pwDlg').addEventListener('close', async () => {
+  const p1 = $('#pwNew').value, p2 = $('#pwNew2').value;
+  $('#pwNew').value = ''; $('#pwNew2').value = '';
+  if ($('#pwDlg').returnValue !== 'ok' || !pwUserId) return;
+  if (p1.length < 8) { toast('รหัสผ่านต้องยาว 8 ตัวขึ้นไป', 'err'); return; }
+  if (p1 !== p2) { toast('รหัสผ่านทั้งสองช่องไม่ตรงกัน', 'err'); return; }
+  try { await adminCall({ action: 'password', user_id: pwUserId, password: p1 }); toast('เปลี่ยนรหัสผ่านแล้ว', 'ok'); }
+  catch (e) { toast('เปลี่ยนรหัสผ่านไม่สำเร็จ: ' + e.message, 'err'); }
+});
 
 /* ---------- install as app (PWA) ---------- */
 if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
@@ -1353,30 +1463,33 @@ function showLogin(msg) {
   setTimeout(() => $('#lEmail').focus(), 50);
 }
 async function afterLogin(user) {
-  const { data, error } = await sb.from('att_staff').select('user_id').eq('user_id', user.id).maybeSingle();
+  const { data, error } = await sb.from('att_staff').select('user_id, role').eq('user_id', user.id).maybeSingle();
   if (error || !data) {
     await sb.auth.signOut();
-    showLogin(`บัญชี ${user.email} ยังไม่ได้รับสิทธิ์ใช้งาน กรุณาติดต่อผู้ดูแลระบบ`);
+    showLogin(`บัญชี ${loginName(user.email)} ยังไม่ได้รับสิทธิ์ใช้งาน กรุณาติดต่อ HR`);
     return;
   }
   currentUser = user;
+  currentRole = data.role === 'hr' ? 'hr' : 'kiosk';
+  document.body.classList.toggle('role-kiosk', currentRole !== 'hr');
+  $('#roleTag').textContent = currentRole === 'hr' ? 'HR' : 'เครื่องสแกน';
   $('#login').style.display = 'none';
   $('#loadingMsg').textContent = 'กำลังโหลดข้อมูล…';
   $('#loading').style.display = 'grid';
   await loadAll();
   buildMatcher(); subscribeRealtime(); flushOutbox(); renderSync();
-  $('#userEmail').textContent = user.email;
+  $('#userEmail').textContent = loginName(user.email);
   $('#loading').style.display = 'none';
   renderKioskSide(); tick();
-  if (!employees.length) toast('เริ่มต้นใช้งาน: ลงทะเบียนพนักงานที่เมนู "พนักงาน"', 'info');
+  if (!employees.length && currentRole === 'hr') toast('เริ่มต้นใช้งาน: ลงทะเบียนพนักงานที่เมนู "พนักงาน"', 'info');
   startKiosk();
 }
 $('#loginForm').addEventListener('submit', async ev => {
   ev.preventDefault();
   $('#btnLogin').disabled = true;
-  const { data, error } = await sb.auth.signInWithPassword({ email: $('#lEmail').value.trim(), password: $('#lPass').value });
+  const { data, error } = await sb.auth.signInWithPassword({ email: toLoginEmail($('#lEmail').value), password: $('#lPass').value });
   $('#lPass').value = '';
-  if (error) { showLogin('อีเมลหรือรหัสผ่านไม่ถูกต้อง'); return; }
+  if (error) { showLogin('ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง'); return; }
   try { await afterLogin(data.user); } catch (e) { showLogin('โหลดข้อมูลไม่สำเร็จ: ' + e.message); }
 });
 $('#btnLogout').addEventListener('click', async () => {
