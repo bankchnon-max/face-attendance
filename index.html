@@ -388,6 +388,8 @@ body.role-kiosk #nav button:not([data-view="kiosk"]){display:none}
             <label class="f" style="flex:1"><span>พักเที่ยงถึง</span><input type="time" id="sLunchEnd"></label>
           </div>
           <label class="check"><input type="checkbox" id="sLunchScan"><span>ช่วงพักเที่ยง ให้การสแกนหน้าของคนที่เข้างานแล้วบันทึกเป็น <b>OT เที่ยง</b> (ได้ OT เท่ากับเวลาพักเที่ยง)</span></label>
+          <h3>ครึ่งวัน</h3>
+          <label class="f"><span>นับเป็นครึ่งวัน (0.5 วัน) เมื่อทำงานไม่ถึงกี่ชั่วโมง — ใส่ 0 เพื่อปิด · คนที่เข้างานตั้งแต่เวลาพักเที่ยงนับเป็นครึ่งวันบ่ายเสมอ</span><input type="number" id="sHalf" min="0" max="12" step="0.5"></label>
           <h3>OT เย็น</h3>
           <label class="f"><span>OT เย็นเริ่มนับหลังเลิกงาน (นาที) — เช่น 30 = เลิก 17:30 เริ่ม OT 18:00</span><input type="number" id="sOtAfter" min="0" max="180"></label>
           <label class="f"><span>ปัดเศษ OT ลงทีละ (นาที)</span>
@@ -504,7 +506,7 @@ const store = {
 };
 const DEFAULTS = {
   shiftStart: '08:30', shiftEnd: '17:30', grace: 5, cooldown: 60, threshold: 0.5, liveness: true, sound: true, voice: true,
-  workDays: [1, 2, 3, 4, 5, 6], lunchStart: '12:00', lunchEnd: '13:00', lunchScan: true, otAfter: 30, otRound: 30
+  workDays: [1, 2, 3, 4, 5, 6], lunchStart: '12:00', lunchEnd: '13:00', lunchScan: true, otAfter: 30, otRound: 30, halfDayHours: 5
 };
 let employees = [];
 let events = [];      // only the months that have been loaded (see ensureMonth)
@@ -721,11 +723,20 @@ function daySummary(emp, key) {
     workedMin = Math.max(0, Math.round(raw - lunchOverlap));
   }
   const lunchMin = present && evs.some(e => e.type === 'lunch') ? lunchMinutes() : 0;
+  // Half day: arriving from lunch time on = afternoon half (late is measured from the end of lunch);
+  // working less than the half-day threshold = counted as 0.5 day
+  const afternoon = present && minOfDay(firstIn) >= minutesOf(settings.lunchStart);
+  const halfUnder = Number(settings.halfDayHours) * 60;
+  const half = present && (afternoon || (halfUnder > 0 && workedMin != null && workedMin < halfUnder));
+  const dayValue = !present ? 0 : half ? 0.5 : 1;
   let late = 0, early = 0, otMin = 0, regularMin = 0;
-  if (present && info.work) late = lateMinutes(firstIn);
+  if (present && info.work) {
+    if (afternoon) { const m = minOfDay(firstIn), start = minutesOf(settings.lunchEnd); late = m > start + Number(settings.grace) ? m - start : 0; }
+    else late = lateMinutes(firstIn);
+  }
   if (lastOut) {
     const outM = minOfDay(lastOut), end = minutesOf(settings.shiftEnd);
-    early = info.work ? Math.max(0, end - outM) : 0;
+    early = info.work && !half ? Math.max(0, end - outM) : 0;
     otMin = roundDown(Math.max(0, outM - (end + Number(settings.otAfter))), Number(settings.otRound));
   }
   if (workedMin != null) regularMin = Math.min(scheduledMin(), Math.max(0, workedMin - otMin));
@@ -737,20 +748,23 @@ function daySummary(emp, key) {
   } else if (!info.work) { status = 'มาทำงานวันหยุด'; cls = 'b-info'; }
   else if (late) { status = `สาย ${late} นาที`; cls = 'b-warn'; }
   else { status = 'ตรงเวลา'; cls = 'b-ok'; }
+  if (half) { status = (afternoon ? 'ครึ่งวันบ่าย' : 'ครึ่งวันเช้า') + (status === 'ตรงเวลา' ? '' : ' · ' + status); if (cls === 'b-ok') cls = 'b-info'; }
   if (lastOut && early > 0) status += ` · ออกก่อน ${early} นาที`;
   if (missingOut) { status += ' · ไม่สแกนออก'; if (cls === 'b-ok') cls = 'b-warn'; }
-  return { key, info, firstIn, lastOut, late, early, workedMin, regularMin, otMin, lunchMin, present, scheduled: info.work, missingOut, status, cls, evs };
+  return { key, info, firstIn, lastOut, late, early, workedMin, regularMin, otMin, lunchMin, present, half, afternoon, dayValue, scheduled: info.work, missingOut, status, cls, evs };
 }
-// Monthly totals per employee: days actually worked + OT
+const fmtDays = n => Number.isInteger(n) ? String(n) : n.toFixed(1);
+// Monthly totals per employee: days actually worked (half days count 0.5) + OT
 function monthSummary(emp, month) {
   const [y, m] = month.split('-').map(Number), days = new Date(y, m, 0).getDate(), today = dayKey(Date.now());
-  const r = { workedDays: 0, offDayWorked: 0, lateCount: 0, lateMin: 0, missingOut: 0, regularMin: 0, otMin: 0, lunchMin: 0, lunchDays: 0 };
+  const r = { workedDays: 0, halfDays: 0, offDayWorked: 0, lateCount: 0, lateMin: 0, missingOut: 0, regularMin: 0, otMin: 0, lunchMin: 0, lunchDays: 0 };
   for (let d = 1; d <= days; d++) {
     const key = `${month}-${pad(d)}`;
     if (key > today) break;
     const s = daySummary(emp, key);
     if (!s.present) continue;
-    r.workedDays++;
+    r.workedDays += s.dayValue;
+    if (s.half) r.halfDays++;
     if (!s.info.work) r.offDayWorked++;
     if (s.late) { r.lateCount++; r.lateMin += s.late; }
     r.regularMin += s.regularMin; r.otMin += s.otMin;
@@ -938,8 +952,8 @@ function showResult(emp, res) {
     let badge;
     if (ev.type === 'lunch') badge = `<span class="badge b-info">+${fmtMin(s.lunchMin)}</span>`;
     else if (s.info.type === 'off') badge = '<span class="badge b-info">ทำงานวันหยุด</span>';
-    else if (ev.type === 'in') badge = s.late ? `<span class="badge b-warn">สาย ${s.late} นาที</span>` : '<span class="badge b-ok">ตรงเวลา</span>';
-    else badge = s.otMin ? `<span class="badge b-info">OT เย็น ${fmtMin(s.otMin)}</span>` : '<span class="badge b-info">ออกงาน</span>';
+    else if (ev.type === 'in') badge = (s.afternoon ? '<span class="badge b-info">ครึ่งวันบ่าย</span> ' : '') + (s.late ? `<span class="badge b-warn">สาย ${s.late} นาที</span>` : s.afternoon ? '' : '<span class="badge b-ok">ตรงเวลา</span>');
+    else badge = s.otMin ? `<span class="badge b-info">OT เย็น ${fmtMin(s.otMin)}</span>` : s.half ? '<span class="badge b-info">ครึ่งวัน</span>' : '<span class="badge b-info">ออกงาน</span>';
     $('#kResSub').innerHTML = `${typ} ${hm(ev.time)} น. ${badge}`;
     setStatus(st, 'ok', ev.type === 'lunch' ? '✓ บันทึก OT เที่ยงสำเร็จ' : `✓ บันทึกเวลา${typ}สำเร็จ`);
     beep(true);
@@ -961,7 +975,7 @@ function renderKioskSide() {
   const today = events.filter(e => dayKey(e.time) === key).slice(-8).reverse();
   $('#kRecent').innerHTML = today.length ? today.map(ev => {
     const emp = empById(ev.empId); if (!emp) return '';
-    const late = ev.type === 'in' && daySummary(emp, key).scheduled ? lateMinutes(ev.time) : 0;
+    const late = ev.type === 'in' ? daySummary(emp, key).late : 0;
     const badge = ev.type === 'out' ? '<span class="badge b-info">ออก</span>' : ev.type === 'lunch' ? '<span class="badge b-info">OT เที่ยง</span>' : late ? `<span class="badge b-warn">สาย ${late}น.</span>` : '<span class="badge b-ok">เข้า</span>';
     return `<div class="row">${(ev.snap || emp.photo) ? `<img src="${esc(ev.snap || emp.photo)}" alt="">` : '<div class="avatar"></div>'}<div class="grow"><div>${esc(emp.name)}</div><div class="small muted">${esc(emp.dept || '-')}${ev.source !== 'face' ? ' · ' + SOURCE_LABEL[ev.source] : ''}</div></div><div style="text-align:right"><div class="t">${hm(ev.time)}</div>${badge}</div></div>`;
   }).join('') : '<div class="empty">ยังไม่มีการลงเวลาวันนี้</div>';
@@ -1112,11 +1126,12 @@ function renderMonthSummary() {
   const [y, mo] = m.split('-').map(Number);
   const label = new Date(y, mo - 1, 1).toLocaleDateString('th-TH', { month: 'long', year: 'numeric' });
   $('#mInfo').innerHTML = `${label} — นับเฉพาะวันที่มาทำงานจริง (สลับกันหยุดได้ ไม่นับเป็นขาด) · ตัวเลขนับถึงวันนี้<br>`
+    + `ครึ่งวัน (0.5 วัน) = เข้างานตั้งแต่ ${esc(settings.lunchStart)} หรือทำงานไม่ถึง ${esc(settings.halfDayHours)} ชม.<br>`
     + `OT เที่ยง = ${fmtMin(lunchMinutes())}/ครั้ง (${esc(settings.lunchStart)}–${esc(settings.lunchEnd)}) · OT เย็นเริ่มหลังเลิกงาน ${esc(settings.otAfter)} นาที ปัดลงทีละ ${esc(settings.otRound)} นาที`;
   $('#mBody').innerHTML = employees.length ? employees.map(e => {
     const r = monthSummary(e, m);
     return `<tr><td>${esc(e.name)}</td><td>${esc(e.dept || '-')}</td>
-      <td class="num"><b>${r.workedDays}</b> วัน${r.offDayWorked ? ` <span class="small muted">(วันหยุด ${r.offDayWorked})</span>` : ''}</td>
+      <td class="num"><b>${fmtDays(r.workedDays)}</b> วัน${r.halfDays || r.offDayWorked ? ` <span class="small muted">(${[r.halfDays ? `ครึ่งวัน ${r.halfDays}` : '', r.offDayWorked ? `วันหยุด ${r.offDayWorked}` : ''].filter(Boolean).join(', ')})</span>` : ''}</td>
       <td class="num">${r.lateCount ? `<span class="badge b-warn">${r.lateCount} ครั้ง / ${r.lateMin} น.</span>` : '-'}</td>
       <td class="num">${r.missingOut ? `<span class="badge b-warn">${r.missingOut}</span>` : '-'}</td>
       <td class="num">${fmtMin(r.regularMin)}</td>
@@ -1151,8 +1166,8 @@ function downloadFile(name, content, type) {
 }
 const csvCell = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
 const toCsv = rows => '﻿' + rows.map(r => r.map(csvCell).join(',')).join('\r\n');
-const HEAD = ['วันที่', 'ประเภทวัน', 'ชื่อ', 'แผนก', 'มาทำงาน', 'เข้างาน', 'ออกงาน', 'ชั่วโมงทำงาน', 'ชม.ปกติ', 'OT เที่ยง (ชม.)', 'OT เย็น (ชม.)', 'สาย(นาที)', 'ออกก่อน(นาที)', 'สถานะ'];
-const csvRow = (key, e, s) => [key, DAY_TYPE_LABEL[s.info.type] + (s.info.note ? ` (${s.info.note})` : ''), e.name, e.dept, s.present ? 1 : 0,
+const HEAD = ['วันที่', 'ประเภทวัน', 'ชื่อ', 'แผนก', 'มาทำงาน (วัน)', 'เข้างาน', 'ออกงาน', 'ชั่วโมงทำงาน', 'ชม.ปกติ', 'OT เที่ยง (ชม.)', 'OT เย็น (ชม.)', 'สาย(นาที)', 'ออกก่อน(นาที)', 'สถานะ'];
+const csvRow = (key, e, s) => [key, DAY_TYPE_LABEL[s.info.type] + (s.info.note ? ` (${s.info.note})` : ''), e.name, e.dept, s.dayValue,
   s.firstIn ? hm(s.firstIn) : '', s.lastOut ? hm(s.lastOut) : '', s.workedMin != null ? toH(s.workedMin) : '', toH(s.regularMin), toH(s.lunchMin), toH(s.otMin), s.late, s.early, s.status];
 $('#btnExportDay').addEventListener('click', async () => {
   const key = $('#rDate').value || dayKey(Date.now());
@@ -1172,10 +1187,10 @@ $('#btnExportMonth').addEventListener('click', async () => {
 $('#btnExportSummary').addEventListener('click', async () => {
   const m = $('#rMonth').value; if (!m) return;
   await ensureMonth(m);
-  const rows = [['เดือน', 'ชื่อ', 'แผนก', 'มาทำงาน (วัน)', 'มาวันหยุดโรงงาน (วัน)', 'สาย (ครั้ง)', 'สายรวม (นาที)', 'ไม่สแกนออก (ครั้ง)', 'ชม.ทำงานปกติ', 'OT เที่ยง (ครั้ง)', 'OT เที่ยง (ชม.)', 'OT เย็น (ชม.)', 'OT รวม (ชม.)']];
+  const rows = [['เดือน', 'ชื่อ', 'แผนก', 'มาทำงาน (วัน)', 'ครึ่งวัน (ครั้ง)', 'มาวันหยุดโรงงาน (วัน)', 'สาย (ครั้ง)', 'สายรวม (นาที)', 'ไม่สแกนออก (ครั้ง)', 'ชม.ทำงานปกติ', 'OT เที่ยง (ครั้ง)', 'OT เที่ยง (ชม.)', 'OT เย็น (ชม.)', 'OT รวม (ชม.)']];
   employees.forEach(e => {
     const r = monthSummary(e, m);
-    rows.push([m, e.name, e.dept, r.workedDays, r.offDayWorked, r.lateCount, r.lateMin, r.missingOut, toH(r.regularMin), r.lunchDays, toH(r.lunchMin), toH(r.otMin), toH(r.lunchMin + r.otMin)]);
+    rows.push([m, e.name, e.dept, r.workedDays, r.halfDays, r.offDayWorked, r.lateCount, r.lateMin, r.missingOut, toH(r.regularMin), r.lunchDays, toH(r.lunchMin), toH(r.otMin), toH(r.lunchMin + r.otMin)]);
   });
   downloadFile(`attendance-summary-${m}.csv`, toCsv(rows), 'text/csv');
 });
@@ -1253,7 +1268,7 @@ function renderSettings() {
   $('#sStart').value = settings.shiftStart; $('#sEnd').value = settings.shiftEnd;
   $('#sGrace').value = settings.grace; $('#sCooldown').value = settings.cooldown;
   $('#sThr').value = settings.threshold; $('#sThrLabel').textContent = Number(settings.threshold).toFixed(2);
-  $('#sLunchStart').value = settings.lunchStart; $('#sLunchEnd').value = settings.lunchEnd; $('#sLunchScan').checked = settings.lunchScan; $('#sOtAfter').value = settings.otAfter; $('#sOtRound').value = String(settings.otRound);
+  $('#sLunchStart').value = settings.lunchStart; $('#sLunchEnd').value = settings.lunchEnd; $('#sLunchScan').checked = settings.lunchScan; $('#sOtAfter').value = settings.otAfter; $('#sOtRound').value = String(settings.otRound); $('#sHalf').value = settings.halfDayHours;
   $('#sLive').checked = settings.liveness; $('#sSound').checked = settings.sound; $('#sVoice').checked = settings.voice;
   $('#sDataStats').innerHTML = [['พนักงาน', employees.length], ['รายการลงเวลา (ที่โหลด)', events.length], ['รอส่งขึ้นระบบ', outbox.length]]
     .map(([l, n]) => `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
@@ -1263,7 +1278,7 @@ $('#settingsForm').addEventListener('submit', ev => {
   ev.preventDefault();
   settings = {
     ...settings,
-    lunchStart: $('#sLunchStart').value || DEFAULTS.lunchStart, lunchEnd: $('#sLunchEnd').value || DEFAULTS.lunchEnd, lunchScan: $('#sLunchScan').checked, otAfter: Math.max(0, Number($('#sOtAfter').value) || 0), otRound: Number($('#sOtRound').value) || 1,
+    lunchStart: $('#sLunchStart').value || DEFAULTS.lunchStart, lunchEnd: $('#sLunchEnd').value || DEFAULTS.lunchEnd, lunchScan: $('#sLunchScan').checked, otAfter: Math.max(0, Number($('#sOtAfter').value) || 0), otRound: Number($('#sOtRound').value) || 1, halfDayHours: Math.max(0, Number($('#sHalf').value) || 0),
     shiftStart: $('#sStart').value || DEFAULTS.shiftStart, shiftEnd: $('#sEnd').value || DEFAULTS.shiftEnd,
     grace: Math.max(0, Number($('#sGrace').value) || 0), cooldown: Math.max(5, Number($('#sCooldown').value) || 60),
     threshold: Number($('#sThr').value), liveness: $('#sLive').checked, sound: $('#sSound').checked, voice: $('#sVoice').checked
