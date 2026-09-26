@@ -1,7 +1,7 @@
 // Tiny static server: node serve.js  ->  http://localhost:5173
 const http = require('http'), fs = require('fs'), path = require('path');
 const root = __dirname, port = process.env.PORT || 5173;
-const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.json': 'application/json', '.css': 'text/css' };
+const types = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.json': 'application/json', '.css': 'text/css', '.png': 'image/png', '.webmanifest': 'application/manifest+json' };
 http.createServer((req, res) => {
   const p = path.join(root, decodeURIComponent(req.url.split('?')[0]).replace(/^\/+$/, '/index.html'));
   if (!p.startsWith(root)) { res.writeHead(403); return res.end(); }

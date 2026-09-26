@@ -4,6 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>ระบบลงเวลาใบหน้า</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#0f7b6c">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="ลงเวลาใบหน้า">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -152,6 +159,10 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 .lunch-banner{margin-top:12px;padding:10px 14px;border-radius:10px;background:var(--info-bg);color:var(--info);display:none;align-items:center;gap:10px;flex-wrap:wrap}
 .lunch-banner.show{display:flex}
 .lunch-banner b{flex:1}
+.pick{display:flex;flex-direction:column;gap:4px;max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px}
+.pick label{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:8px;cursor:pointer}
+.pick label:has(input:checked){background:var(--ok-bg)}
+.pick img,.pick .avatar{width:32px;height:32px}
 .sync{font-size:12px;font-weight:600;padding:2px 10px;border-radius:99px;white-space:nowrap}
 .sync.ok{background:var(--ok-bg);color:var(--ok)}
 .sync.warn{background:var(--warn-bg);color:var(--warn)}
@@ -160,7 +171,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 .login h2{font-size:18px;margin:14px 0 16px}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15/dist/face-api.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.2/dist/umd/supabase.js"></script>
 </head>
 <body>
 
@@ -198,6 +209,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
     <div class="userbox">
       <span class="sync ok" id="sync">ออนไลน์</span>
       <span class="small muted" id="userEmail"></span>
+      <button class="btn sm" id="btnInstall" hidden>ติดตั้งแอป</button>
       <button class="btn sm" id="btnLogout">ออกจากระบบ</button>
       <span class="clock-sm" id="clockSm"></span>
     </div>
@@ -227,7 +239,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
           <button class="btn sm" id="btnLunchMode"></button>
         </div>
         <div class="actions">
-          <button class="btn" id="btnManual">ลงเวลาด้วยรหัสพนักงาน</button>
+          <button class="btn" id="btnManual">สแกนไม่ผ่าน? ลงเวลาด้วยการเลือกชื่อ</button>
           <button class="btn" id="btnFull">เต็มจอ</button>
         </div>
       </div>
@@ -247,7 +259,6 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
       <div class="card">
         <h2 id="enrollTitle">ลงทะเบียนพนักงานใหม่</h2>
         <form id="enrollForm" autocomplete="off">
-          <label class="f"><span>รหัสพนักงาน *</span><input type="text" id="fCode" required placeholder="เช่น EMP001"></label>
           <label class="f"><span>ชื่อ-นามสกุล *</span><input type="text" id="fName" required placeholder="เช่น สมชาย ใจดี"></label>
           <label class="f"><span>แผนก</span><input type="text" id="fDept" placeholder="เช่น บัญชี"></label>
           <label class="check"><input type="checkbox" id="fConsent" required><span class="small">พนักงานยินยอมให้เก็บและใช้ข้อมูลใบหน้าเพื่อการลงเวลาทำงาน (ข้อมูลชีวภาพตาม PDPA มาตรา 26)</span></label>
@@ -268,7 +279,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
         <h2>รายชื่อพนักงาน <span class="muted small" id="empCount"></span></h2>
         <div class="table-wrap">
           <table>
-            <thead><tr><th></th><th>รหัส</th><th>ชื่อ</th><th>แผนก</th><th>ตัวอย่างใบหน้า</th><th></th></tr></thead>
+            <thead><tr><th></th><th>ชื่อ</th><th>แผนก</th><th>ตัวอย่างใบหน้า</th><th></th></tr></thead>
             <tbody id="empBody"></tbody>
           </table>
         </div>
@@ -288,7 +299,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
       <div class="note" id="mInfo" style="margin:0 0 14px"></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>รหัส</th><th>ชื่อ</th><th>แผนก</th><th>มาทำงาน</th><th>สาย (ครั้ง / นาที)</th><th>ไม่สแกนออก</th><th>ชม.ทำงานปกติ</th><th>OT เที่ยง</th><th>OT เย็น</th><th>OT รวม</th></tr></thead>
+          <thead><tr><th>ชื่อ</th><th>แผนก</th><th>มาทำงาน</th><th>สาย (ครั้ง / นาที)</th><th>ไม่สแกนออก</th><th>ชม.ทำงานปกติ</th><th>OT เที่ยง</th><th>OT เย็น</th><th>OT รวม</th></tr></thead>
           <tbody id="mBody"></tbody>
         </table>
       </div>
@@ -305,7 +316,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
       <h3>สรุปรายวัน</h3>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>รหัส</th><th>ชื่อ</th><th>แผนก</th><th>เข้างาน</th><th>ออกงาน</th><th>ชั่วโมงทำงาน</th><th>สาย (นาที)</th><th>OT เที่ยง</th><th>OT เย็น</th><th>สถานะ</th></tr></thead>
+          <thead><tr><th>ชื่อ</th><th>แผนก</th><th>เข้างาน</th><th>ออกงาน</th><th>ชั่วโมงทำงาน</th><th>สาย (นาที)</th><th>OT เที่ยง</th><th>OT เย็น</th><th>สถานะ</th></tr></thead>
           <tbody id="rBody"></tbody>
         </table>
       </div>
@@ -408,9 +419,10 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 
 <dialog id="manualDlg">
   <form method="dialog" id="manualForm">
-    <h2 style="margin:0 0 12px;font-size:17px">ลงเวลาด้วยรหัสพนักงาน</h2>
-    <label class="f"><span>รหัสพนักงาน</span><input type="text" id="mCode" autocomplete="off"></label>
-    <div class="muted small" style="margin-bottom:12px">ใช้เมื่อสแกนหน้าไม่ผ่าน ระบบจะบันทึกว่าลงเวลาแบบ manual</div>
+    <h2 style="margin:0 0 12px;font-size:17px">ลงเวลาด้วยการเลือกชื่อ</h2>
+    <label class="f"><span>ค้นหาชื่อ</span><input type="text" id="mSearch" autocomplete="off" placeholder="พิมพ์บางส่วนของชื่อ"></label>
+    <div class="pick" id="mList"></div>
+    <div class="muted small" style="margin:10px 0 12px">ใช้เมื่อสแกนหน้าไม่ผ่าน ระบบจะบันทึกไว้ว่าลงเวลาด้วยการเลือกชื่อ ให้ HR ตรวจสอบได้</div>
     <div class="actions" style="justify-content:flex-end">
       <button class="btn" value="cancel" formnovalidate>ยกเลิก</button>
       <button class="btn primary" value="ok">ลงเวลา</button>
@@ -472,8 +484,8 @@ const empById = id => employees.find(e => e.id === id);
 const iso = t => t == null ? null : new Date(t).toISOString();
 const ms = s => s == null ? null : Date.parse(s);
 
-const empFromRow = r => ({ id: r.id, code: r.code, name: r.name, dept: r.dept || '', descriptors: r.descriptors || [], photo: r.photo, consentAt: ms(r.consent_at), createdAt: ms(r.created_at) });
-const empToRow = e => ({ id: e.id, code: e.code, name: e.name, dept: e.dept || null, descriptors: e.descriptors, photo: e.photo || null, consent_at: iso(e.consentAt), created_at: iso(e.createdAt || Date.now()) });
+const empFromRow = r => ({ id: r.id, name: r.name, dept: r.dept || '', descriptors: r.descriptors || [], photo: r.photo, consentAt: ms(r.consent_at), createdAt: ms(r.created_at) });
+const empToRow = e => ({ id: e.id, name: e.name, dept: e.dept || null, descriptors: e.descriptors, photo: e.photo || null, consent_at: iso(e.consentAt), created_at: iso(e.createdAt || Date.now()) });
 const evFromRow = r => ({ id: r.id, empId: r.emp_id, time: ms(r.time), type: r.type, score: r.score, live: r.live, source: r.source, snap: r.snap ?? null });
 const evToRow = e => ({ id: e.id, emp_id: e.empId, time: iso(e.time), type: e.type, score: e.score ?? null, live: !!e.live, source: e.source || 'face', snap: e.snap || null });
 
@@ -521,7 +533,7 @@ function needData(months, snapDay, rerender) {
 }
 async function loadAll() {
   const [emps, cal, set] = await Promise.all([
-    fetchAll(() => sb.from('att_employees').select('*').order('code')),
+    fetchAll(() => sb.from('att_employees').select('*').order('name')),
     fetchAll(() => sb.from('att_calendar').select('*')),
     sb.from('att_settings').select('data').eq('id', 1).maybeSingle()
   ]);
@@ -597,7 +609,7 @@ function subscribeRealtime() {
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'att_employees' }, p => {
       employees = p.eventType === 'DELETE' ? employees.filter(e => e.id !== p.old.id)
-        : [...employees.filter(e => e.id !== p.new.id), empFromRow(p.new)].sort((a, b) => a.code.localeCompare(b.code));
+        : [...employees.filter(e => e.id !== p.new.id), empFromRow(p.new)].sort((a, b) => a.name.localeCompare(b.name, 'th'));
       buildMatcher(); refreshView();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'att_calendar' }, p => {
@@ -926,7 +938,6 @@ const POSES = ['มองตรงเข้ากล้อง', 'หันหน
 function resetEnrollForm() {
   editingId = null;
   $('#enrollForm').reset();
-  $('#fCode').disabled = false;
   $('#enrollTitle').textContent = 'ลงทะเบียนพนักงานใหม่';
   $('#btnEnroll').textContent = 'เปิดกล้องและบันทึกใบหน้า';
 }
@@ -937,10 +948,11 @@ function stopEnroll() {
   $('#btnCancelEnroll').style.display = 'none'; $('#btnEnroll').disabled = false;
 }
 async function runEnroll() {
-  const code = $('#fCode').value.trim(), name = $('#fName').value.trim(), dept = $('#fDept').value.trim();
-  if (!code || !name) return;
+  const name = $('#fName').value.trim(), dept = $('#fDept').value.trim();
+  if (!name) return;
   if (!$('#fConsent').checked) { toast('ต้องได้รับความยินยอมจากพนักงานก่อน', 'warn'); return; }
-  if (employees.some(e => e.code.toLowerCase() === code.toLowerCase() && e.id !== editingId)) { toast('รหัสพนักงานนี้มีอยู่แล้ว', 'err'); return; }
+  const sameName = employees.find(e => e.name.trim() === name && e.id !== editingId);
+  if (sameName && !confirm(`มีพนักงานชื่อ "${name}" อยู่แล้ว${sameName.dept ? ` (แผนก ${sameName.dept})` : ''}\nต้องการลงทะเบียนเพิ่มอีกคนหรือไม่? (ควรใส่แผนกหรือชื่อเล่นให้แยกกันได้)`)) return;
   const video = $('#eVideo'), canvas = $('#eCanvas'), st = $('#eStatus');
   $('#eCamWrap').style.display = 'block'; st.style.display = 'flex'; $('#eProgWrap').style.display = 'block';
   $('#btnCancelEnroll').style.display = 'inline-block'; $('#btnEnroll').disabled = true;
@@ -972,14 +984,14 @@ async function runEnroll() {
     const best = matcher.findBestMatch(mean);
     if (best.label !== 'unknown' && best.label !== editingId && best.distance < 0.45) {
       const other = empById(best.label);
-      if (other && !confirm(`ใบหน้านี้คล้ายกับ "${other.name}" (${other.code}) มาก\nอาจเป็นการลงทะเบียนซ้ำ ต้องการบันทึกต่อหรือไม่?`)) { stopEnroll(); return; }
+      if (other && !confirm(`ใบหน้านี้คล้ายกับ "${other.name}"${other.dept ? ` (${other.dept})` : ''} มาก\nอาจเป็นการลงทะเบียนซ้ำ ต้องการบันทึกต่อหรือไม่?`)) { stopEnroll(); return; }
     }
   }
   const emp = editingId ? { ...empById(editingId), name, dept, descriptors: descs, photo, consentAt: Date.now() }
-    : { id: uid(), code, name, dept, descriptors: descs, photo, consentAt: Date.now(), createdAt: Date.now() };
+    : { id: uid(), name, dept, descriptors: descs, photo, consentAt: Date.now(), createdAt: Date.now() };
   setStatus(st, 'info', 'กำลังบันทึก…');
   if (!(await saveEmployee(emp))) { stopEnroll(); return; }
-  employees = [...employees.filter(x => x.id !== emp.id), emp].sort((a, b) => a.code.localeCompare(b.code));
+  employees = [...employees.filter(x => x.id !== emp.id), emp].sort((a, b) => a.name.localeCompare(b.name, 'th'));
   buildMatcher();
   setStatus(st, 'ok', `บันทึกใบหน้าของ ${name} เรียบร้อย`);
   toast(`ลงทะเบียน ${name} สำเร็จ`, 'ok');
@@ -991,7 +1003,7 @@ function renderEmployees() {
   $('#empBody').innerHTML = employees.length ? employees.map(e => `
     <tr>
       <td>${e.photo ? `<img class="avatar" src="${esc(e.photo)}" alt="">` : '<div class="avatar"></div>'}</td>
-      <td>${esc(e.code)}</td><td>${esc(e.name)}</td><td>${esc(e.dept || '-')}</td>
+      <td>${esc(e.name)}</td><td>${esc(e.dept || '-')}</td>
       <td>${e.descriptors?.length ? `<span class="badge b-ok">${e.descriptors.length} มุม</span>` : '<span class="badge b-err">ไม่มี</span>'}</td>
       <td><button class="btn sm" data-reenroll="${e.id}">ถ่ายใหม่</button> <button class="btn sm danger" data-del="${e.id}">ลบ</button></td>
     </tr>`).join('') : '<tr><td colspan="6" class="empty">ยังไม่มีพนักงาน เริ่มลงทะเบียนจากฟอร์มด้านซ้าย</td></tr>';
@@ -1001,7 +1013,7 @@ $('#empBody').addEventListener('click', async ev => {
   if (re) {
     const e = empById(re.dataset.reenroll);
     editingId = e.id;
-    $('#fCode').value = e.code; $('#fCode').disabled = true; $('#fName').value = e.name; $('#fDept').value = e.dept || '';
+    $('#fName').value = e.name; $('#fDept').value = e.dept || '';
     $('#enrollTitle').textContent = `แก้ไข / ถ่ายหน้าใหม่: ${e.name}`;
     $('#btnEnroll').textContent = 'เปิดกล้องและบันทึกใบหน้าใหม่';
     $('#fName').focus();
@@ -1019,7 +1031,7 @@ $('#enrollForm').addEventListener('submit', ev => { ev.preventDefault(); runEnro
 $('#btnCancelEnroll').addEventListener('click', () => { stopEnroll(); resetEnrollForm(); });
 
 /* ---------- reports ---------- */
-const SOURCE_LABEL = { face: 'สแกนหน้า', manual: 'รหัสพนักงาน', hr: 'HR เพิ่มเอง' };
+const SOURCE_LABEL = { face: 'สแกนหน้า', manual: 'เลือกชื่อ', hr: 'HR เพิ่มเอง' };
 const fmtMin = m => { if (m == null) return '-'; m = Math.round(m); return m % 60 ? `${Math.floor(m / 60)} ชม. ${m % 60} น.` : `${m / 60} ชม.`; };
 const toH = m => (Math.round(m) / 60).toFixed(2);
 const statCards = list => list.map(([l, n]) => `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
@@ -1037,14 +1049,14 @@ function renderReports() {
     ['OT เที่ยง / เย็น', `${fmtMin(lunchTotal)} / ${fmtMin(eveTotal)}`]
   ]);
   $('#rBody').innerHTML = rows.length ? rows.map(({ e, s }) => `
-    <tr><td>${esc(e.code)}</td><td>${esc(e.name)}</td><td>${esc(e.dept || '-')}</td>
+    <tr><td>${esc(e.name)}</td><td>${esc(e.dept || '-')}</td>
     <td class="num">${s.firstIn ? hm(s.firstIn) : '-'}</td><td class="num">${s.lastOut ? hm(s.lastOut) : '-'}</td>
     <td class="num">${fmtMin(s.workedMin)}</td><td class="num">${s.late || '-'}</td>
     <td class="num">${s.lunchMin ? fmtMin(s.lunchMin) : '-'}</td>
     <td class="num">${s.otMin ? fmtMin(s.otMin) : '-'}</td>
     <td><span class="badge ${s.cls}">${esc(s.status)}</span></td></tr>`).join('')
     : '<tr><td colspan="10" class="empty">ยังไม่มีพนักงาน</td></tr>';
-  $('#hrEmp').innerHTML = employees.map(e => `<option value="${e.id}">${esc(e.code)} · ${esc(e.name)}</option>`).join('');
+  $('#hrEmp').innerHTML = employees.map(e => `<option value="${e.id}">${esc(e.name)}${e.dept ? ` · ${esc(e.dept)}` : ''}</option>`).join('');
   const log = events.filter(e => dayKey(e.time) === key).sort((a, b) => b.time - a.time);
   const typeBadge = { in: 'b-ok', out: 'b-info', lunch: 'b-warn' };
   $('#rLog').innerHTML = log.length ? log.map(ev => {
@@ -1068,7 +1080,7 @@ function renderMonthSummary() {
     + `OT เที่ยง = ${fmtMin(lunchMinutes())}/ครั้ง (${esc(settings.lunchStart)}–${esc(settings.lunchEnd)}) · OT เย็นเริ่มหลังเลิกงาน ${esc(settings.otAfter)} นาที ปัดลงทีละ ${esc(settings.otRound)} นาที`;
   $('#mBody').innerHTML = employees.length ? employees.map(e => {
     const r = monthSummary(e, m);
-    return `<tr><td>${esc(e.code)}</td><td>${esc(e.name)}</td><td>${esc(e.dept || '-')}</td>
+    return `<tr><td>${esc(e.name)}</td><td>${esc(e.dept || '-')}</td>
       <td class="num"><b>${r.workedDays}</b> วัน${r.offDayWorked ? ` <span class="small muted">(วันหยุด ${r.offDayWorked})</span>` : ''}</td>
       <td class="num">${r.lateCount ? `<span class="badge b-warn">${r.lateCount} ครั้ง / ${r.lateMin} น.</span>` : '-'}</td>
       <td class="num">${r.missingOut ? `<span class="badge b-warn">${r.missingOut}</span>` : '-'}</td>
@@ -1104,8 +1116,8 @@ function downloadFile(name, content, type) {
 }
 const csvCell = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
 const toCsv = rows => '﻿' + rows.map(r => r.map(csvCell).join(',')).join('\r\n');
-const HEAD = ['วันที่', 'ประเภทวัน', 'รหัส', 'ชื่อ', 'แผนก', 'มาทำงาน', 'เข้างาน', 'ออกงาน', 'ชั่วโมงทำงาน', 'ชม.ปกติ', 'OT เที่ยง (ชม.)', 'OT เย็น (ชม.)', 'สาย(นาที)', 'ออกก่อน(นาที)', 'สถานะ'];
-const csvRow = (key, e, s) => [key, DAY_TYPE_LABEL[s.info.type] + (s.info.note ? ` (${s.info.note})` : ''), e.code, e.name, e.dept, s.present ? 1 : 0,
+const HEAD = ['วันที่', 'ประเภทวัน', 'ชื่อ', 'แผนก', 'มาทำงาน', 'เข้างาน', 'ออกงาน', 'ชั่วโมงทำงาน', 'ชม.ปกติ', 'OT เที่ยง (ชม.)', 'OT เย็น (ชม.)', 'สาย(นาที)', 'ออกก่อน(นาที)', 'สถานะ'];
+const csvRow = (key, e, s) => [key, DAY_TYPE_LABEL[s.info.type] + (s.info.note ? ` (${s.info.note})` : ''), e.name, e.dept, s.present ? 1 : 0,
   s.firstIn ? hm(s.firstIn) : '', s.lastOut ? hm(s.lastOut) : '', s.workedMin != null ? toH(s.workedMin) : '', toH(s.regularMin), toH(s.lunchMin), toH(s.otMin), s.late, s.early, s.status];
 $('#btnExportDay').addEventListener('click', async () => {
   const key = $('#rDate').value || dayKey(Date.now());
@@ -1125,10 +1137,10 @@ $('#btnExportMonth').addEventListener('click', async () => {
 $('#btnExportSummary').addEventListener('click', async () => {
   const m = $('#rMonth').value; if (!m) return;
   await ensureMonth(m);
-  const rows = [['เดือน', 'รหัส', 'ชื่อ', 'แผนก', 'มาทำงาน (วัน)', 'มาวันหยุดโรงงาน (วัน)', 'สาย (ครั้ง)', 'สายรวม (นาที)', 'ไม่สแกนออก (ครั้ง)', 'ชม.ทำงานปกติ', 'OT เที่ยง (ครั้ง)', 'OT เที่ยง (ชม.)', 'OT เย็น (ชม.)', 'OT รวม (ชม.)']];
+  const rows = [['เดือน', 'ชื่อ', 'แผนก', 'มาทำงาน (วัน)', 'มาวันหยุดโรงงาน (วัน)', 'สาย (ครั้ง)', 'สายรวม (นาที)', 'ไม่สแกนออก (ครั้ง)', 'ชม.ทำงานปกติ', 'OT เที่ยง (ครั้ง)', 'OT เที่ยง (ชม.)', 'OT เย็น (ชม.)', 'OT รวม (ชม.)']];
   employees.forEach(e => {
     const r = monthSummary(e, m);
-    rows.push([m, e.code, e.name, e.dept, r.workedDays, r.offDayWorked, r.lateCount, r.lateMin, r.missingOut, toH(r.regularMin), r.lunchDays, toH(r.lunchMin), toH(r.otMin), toH(r.lunchMin + r.otMin)]);
+    rows.push([m, e.name, e.dept, r.workedDays, r.offDayWorked, r.lateCount, r.lateMin, r.missingOut, toH(r.regularMin), r.lunchDays, toH(r.lunchMin), toH(r.otMin), toH(r.lunchMin + r.otMin)]);
   });
   downloadFile(`attendance-summary-${m}.csv`, toCsv(rows), 'text/csv');
 });
@@ -1227,7 +1239,7 @@ $('#btnBackup').addEventListener('click', async () => {
   toast('กำลังเตรียมไฟล์สำรอง…');
   try {
     const [emps, evs] = await Promise.all([
-      fetchAll(() => sb.from('att_employees').select('*').order('code')),
+      fetchAll(() => sb.from('att_employees').select('*').order('name')),
       fetchAll(() => sb.from('att_events').select('id,emp_id,time,type,score,live,source').order('time'))
     ]);
     downloadFile(`face-attendance-backup-${dayKey(Date.now())}.json`, JSON.stringify({ version: 3, exportedAt: new Date().toISOString(), employees: emps.map(empFromRow), events: evs.map(evFromRow), settings, calendar }), 'application/json');
@@ -1269,12 +1281,21 @@ $('#btnClearAll').addEventListener('click', async () => {
 });
 
 /* ---------- manual check-in ---------- */
-$('#btnManual').addEventListener('click', () => { $('#mCode').value = ''; $('#manualDlg').showModal(); $('#mCode').focus(); });
+function renderPickList() {
+  const q = $('#mSearch').value.trim().toLowerCase();
+  const list = employees.filter(e => !q || e.name.toLowerCase().includes(q) || (e.dept || '').toLowerCase().includes(q));
+  $('#mList').innerHTML = list.length ? list.map(e => `<label><input type="radio" name="mEmp" value="${e.id}">
+    ${e.photo ? `<img class="avatar" src="${esc(e.photo)}" alt="">` : '<span class="avatar"></span>'}
+    <span>${esc(e.name)}${e.dept ? ` <span class="muted small">${esc(e.dept)}</span>` : ''}</span></label>`).join('')
+    : '<div class="empty small">ไม่พบชื่อ</div>';
+}
+$('#mSearch').addEventListener('input', renderPickList);
+$('#btnManual').addEventListener('click', () => { $('#mSearch').value = ''; renderPickList(); $('#manualDlg').showModal(); $('#mSearch').focus(); });
 $('#manualDlg').addEventListener('close', () => {
   if ($('#manualDlg').returnValue !== 'ok') return;
-  const code = $('#mCode').value.trim().toLowerCase();
-  const emp = employees.find(e => e.code.toLowerCase() === code);
-  if (!emp) { toast('ไม่พบรหัสพนักงานนี้', 'err'); return; }
+  const picked = document.querySelector('#mList input:checked');
+  const emp = picked && empById(picked.value);
+  if (!emp) { toast('กรุณาเลือกชื่อพนักงาน', 'err'); return; }
   showResult(emp, recordEvent(emp, { source: 'manual' }));
 });
 $('#btnFull').addEventListener('click', () => {
@@ -1309,6 +1330,18 @@ function tick() {
 setInterval(tick, 1000); tick();
 $('#rDate').value = dayKey(Date.now());
 $('#rMonth').value = dayKey(Date.now()).slice(0, 7);
+
+/* ---------- install as app (PWA) ---------- */
+if ('serviceWorker' in navigator) addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+let installPrompt = null;
+addEventListener('beforeinstallprompt', e => { e.preventDefault(); installPrompt = e; $('#btnInstall').hidden = false; });
+addEventListener('appinstalled', () => { installPrompt = null; $('#btnInstall').hidden = true; toast('ติดตั้งแอปแล้ว เปิดได้จากหน้าจอหลัก', 'ok'); });
+$('#btnInstall').addEventListener('click', async () => {
+  if (!installPrompt) return;
+  installPrompt.prompt();
+  await installPrompt.userChoice;
+  installPrompt = null; $('#btnInstall').hidden = true;
+});
 
 /* ---------- boot ---------- */
 function showLogin(msg) {

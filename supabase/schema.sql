@@ -1,5 +1,5 @@
 -- Face attendance app schema (applied to Supabase as migrations
--- att_face_attendance_schema + att_move_is_staff_to_private_schema).
+-- att_face_attendance_schema + att_move_is_staff_to_private_schema + att_drop_employee_code).
 -- Only users listed in att_staff can read or write anything.
 
 create table public.att_staff (
@@ -10,7 +10,6 @@ create table public.att_staff (
 
 create table public.att_employees (
   id text primary key default gen_random_uuid()::text,
-  code text not null unique,
   name text not null,
   dept text,
   descriptors jsonb not null default '[]'::jsonb,   -- face embeddings (128 floats each), biometric data
@@ -18,6 +17,8 @@ create table public.att_employees (
   consent_at timestamptz,
   created_at timestamptz not null default now()
 );
+
+create index att_employees_name_idx on public.att_employees (name);
 
 create table public.att_events (
   id text primary key default gen_random_uuid()::text,
