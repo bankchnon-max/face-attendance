@@ -1,5 +1,5 @@
 -- Face attendance app schema (applied to Supabase as migrations
--- att_face_attendance_schema + att_move_is_staff_to_private_schema + att_drop_employee_code + att_roles_hr_and_kiosk + att_split_write_policies_and_snap_retention).
+-- att_face_attendance_schema + att_move_is_staff_to_private_schema + att_drop_employee_code + att_roles_hr_and_kiosk + att_split_write_policies_and_snap_retention + att_leaves).
 -- Roles: hr = everything; kiosk = read what scanning needs + add scans only.
 -- Only users listed in att_staff can read or write anything.
 
@@ -116,3 +116,37 @@ alter publication supabase_realtime add table public.att_events, public.att_empl
 create extension if not exists pg_cron;
 select cron.schedule('att-clear-old-snapshots', '30 19 * * *',
   $$update public.att_events set snap = null where snap is not null and time < now() - interval '90 days'$$);
+
+-- Leave requests: made at the kiosk (face-verified, always pending) or entered by HR; only HR approves.
+create table public.att_leaves (
+  id text primary key default gen_random_uuid()::text,
+  emp_id text not null,
+  type text not null check (type in ('sick','personal','vacation','other')),
+  start_date date not null,
+  end_date date not null,
+  part text not null default 'full' check (part in ('full','am','pm')),
+  reason text,
+  status text not null default 'pending' check (status in ('pending','approved','rejected','cancelled')),
+  source text not null default 'kiosk' check (source in ('kiosk','hr')),
+  snap text,
+  requested_at timestamptz not null default now(),
+  decided_by uuid,
+  decided_at timestamptz,
+  decision_note text,
+  check (end_date >= start_date),
+  check (part = 'full' or end_date = start_date),
+  check (end_date - start_date <= 60)
+);
+create index att_leaves_emp_idx on public.att_leaves (emp_id, start_date);
+create index att_leaves_status_idx on public.att_leaves (status) where status = 'pending';
+alter table public.att_leaves enable row level security;
+revoke all on public.att_leaves from anon;
+create policy att_leaves_read on public.att_leaves for select to authenticated using ((select att_private.is_hr()));
+create policy att_leaves_insert on public.att_leaves for insert to authenticated with check (
+  (select att_private.is_hr())
+  or ((select att_private.is_staff()) and status = 'pending' and source = 'kiosk'
+      and decided_by is null and decided_at is null and decision_note is null
+      and start_date >= current_date - 7));
+create policy att_leaves_update on public.att_leaves for update to authenticated using ((select att_private.is_hr())) with check ((select att_private.is_hr()));
+create policy att_leaves_delete on public.att_leaves for delete to authenticated using ((select att_private.is_hr()));
+alter publication supabase_realtime add table public.att_leaves;

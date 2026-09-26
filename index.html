@@ -161,6 +161,14 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 .lunch-banner b{flex:1}
 body.role-kiosk #nav button:not([data-view="kiosk"]){display:none}
 .role-tag{font-size:12px;font-weight:600;padding:2px 10px;border-radius:99px;background:var(--surface-2);color:var(--muted);white-space:nowrap}
+.nav-badge{display:inline-block;min-width:18px;padding:0 5px;margin-left:4px;border-radius:99px;background:var(--err);color:#fff;font-size:11px;line-height:18px;text-align:center}
+.lv-card{display:flex;gap:12px;align-items:flex-start;padding:10px;border-radius:10px;background:var(--surface-2)}
+.lv-card img,.lv-card .avatar{width:48px;height:48px;border-radius:10px;object-fit:cover;flex:none}
+.lv-card .grow{flex:1;min-width:0}
+.lv-card .actions{margin-top:8px}
+dialog.wide{width:min(94vw,460px)}
+.cam.mini{aspect-ratio:4/3;margin-bottom:10px}
+textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);font:inherit;color:inherit;resize:vertical}
 .pick{display:flex;flex-direction:column;gap:4px;max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px}
 .pick label{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:8px;cursor:pointer}
 .pick label:has(input:checked){background:var(--ok-bg)}
@@ -204,6 +212,7 @@ body.role-kiosk #nav button:not([data-view="kiosk"]){display:none}
       <button data-view="kiosk" class="active">สแกนเข้างาน</button>
       <button data-view="employees">พนักงาน</button>
       <button data-view="reports">รายงาน</button>
+      <button data-view="leaves">การลา<span class="nav-badge" id="leaveBadge" hidden></span></button>
       <button data-view="calendar">ปฏิทินงาน</button>
       <button data-view="settings">ตั้งค่า</button>
     </nav>
@@ -242,6 +251,7 @@ body.role-kiosk #nav button:not([data-view="kiosk"]){display:none}
           <button class="btn sm" id="btnLunchMode"></button>
         </div>
         <div class="actions">
+          <button class="btn primary" id="btnLeave">ขอลา</button>
           <button class="btn" id="btnManual">สแกนไม่ผ่าน? ลงเวลาด้วยการเลือกชื่อ</button>
           <button class="btn" id="btnFull">เต็มจอ</button>
         </div>
@@ -302,7 +312,7 @@ body.role-kiosk #nav button:not([data-view="kiosk"]){display:none}
       <div class="note" id="mInfo" style="margin:0 0 14px"></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>ชื่อ</th><th>แผนก</th><th>มาทำงาน</th><th>สาย (ครั้ง / นาที)</th><th>ไม่สแกนออก</th><th>ชม.ทำงานปกติ</th><th>OT เที่ยง</th><th>OT เย็น</th><th>OT รวม</th></tr></thead>
+          <thead><tr><th>ชื่อ</th><th>แผนก</th><th>มาทำงาน</th><th>ลา (วัน)</th><th>สาย (ครั้ง / นาที)</th><th>ไม่สแกนออก</th><th>ชม.ทำงานปกติ</th><th>OT เที่ยง</th><th>OT เย็น</th><th>OT รวม</th></tr></thead>
           <tbody id="mBody"></tbody>
         </table>
       </div>
@@ -336,6 +346,57 @@ body.role-kiosk #nav button:not([data-view="kiosk"]){display:none}
           <thead><tr><th>เวลา</th><th>ภาพ</th><th>ชื่อ</th><th>ประเภท</th><th>วิธี</th><th>ความคล้าย</th><th>Liveness</th><th></th></tr></thead>
           <tbody id="rLog"></tbody>
         </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- LEAVES -->
+  <section class="view" id="view-leaves">
+    <div class="grid two">
+      <div class="card">
+        <h2>คำขอลารออนุมัติ <span class="muted small" id="pendCount"></span></h2>
+        <div class="list" id="pendList"></div>
+        <h3>ลงวันลาแทนพนักงาน (อนุมัติทันที)</h3>
+        <form id="hrLeaveForm" autocomplete="off">
+          <label class="f"><span>พนักงาน</span><select id="hlEmp" required></select></label>
+          <div class="range-row">
+            <label class="f" style="flex:1"><span>ประเภท</span><select id="hlType"></select></label>
+            <label class="f" style="flex:1"><span>ช่วงเวลา</span><select id="hlPart"><option value="full">เต็มวัน</option><option value="am">ครึ่งวันเช้า</option><option value="pm">ครึ่งวันบ่าย</option></select></label>
+          </div>
+          <div class="range-row">
+            <label class="f" style="flex:1"><span>ตั้งแต่วันที่</span><input type="date" id="hlStart" required></label>
+            <label class="f" style="flex:1" id="hlEndWrap"><span>ถึงวันที่</span><input type="date" id="hlEnd"></label>
+          </div>
+          <label class="f"><span>เหตุผล / หมายเหตุ</span><input type="text" id="hlReason"></label>
+          <button class="btn primary" type="submit">บันทึกวันลา</button>
+        </form>
+      </div>
+      <div class="card">
+        <h2>ประวัติการลา</h2>
+        <div class="toolbar">
+          <label class="f"><span>ปี (ค.ศ.)</span><input type="number" id="lvYear" min="2020" max="2100" style="width:110px"></label>
+          <label class="f"><span>พนักงาน</span><select id="lvEmpFilter"><option value="">ทุกคน</option></select></label>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>ชื่อ</th><th>ประเภท</th><th>วันที่</th><th>วัน</th><th>เหตุผล</th><th>สถานะ</th><th></th></tr></thead>
+            <tbody id="lvBody"></tbody>
+          </table>
+        </div>
+        <h3>สิทธิ์ลาในปีนี้ (วันที่ใช้ไป / สิทธิ์ต่อปี)</h3>
+        <form class="toolbar" id="quotaForm">
+          <label class="f"><span>ลาป่วย</span><input type="number" id="qSick" min="0" max="365" style="width:80px"></label>
+          <label class="f"><span>ลากิจ</span><input type="number" id="qPersonal" min="0" max="365" style="width:80px"></label>
+          <label class="f"><span>ลาพักร้อน</span><input type="number" id="qVacation" min="0" max="365" style="width:80px"></label>
+          <button class="btn" type="submit">บันทึกสิทธิ์ลา</button>
+        </form>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>ชื่อ</th><th>ลาป่วย</th><th>ลากิจ</th><th>ลาพักร้อน</th><th>ลาอื่นๆ</th></tr></thead>
+            <tbody id="quotaBody"></tbody>
+          </table>
+        </div>
+        <p class="small muted">นับเฉพาะวันทำงานของโรงงาน (ไม่นับวันหยุดในปฏิทิน) · ครึ่งวันนับ 0.5</p>
       </div>
     </div>
   </section>
@@ -479,6 +540,39 @@ body.role-kiosk #nav button:not([data-view="kiosk"]){display:none}
   </form>
 </dialog>
 
+<dialog id="leaveDlg" class="wide">
+  <div id="lvStep1">
+    <h2 style="margin:0 0 10px;font-size:17px">ขอลา — ยืนยันตัวตน</h2>
+    <div class="cam mini"><video id="lvVideo" playsinline muted></video></div>
+    <div class="status info" id="lvStatus" style="font-size:15px">มองกล้องแล้วกระพริบตาช้าๆ เพื่อยืนยันตัวตน</div>
+    <div id="lvPickWrap" hidden>
+      <label class="f" style="margin-top:10px"><span>ค้นหาชื่อ</span><input type="text" id="lvSearch" autocomplete="off"></label>
+      <div class="pick" id="lvPickList"></div>
+    </div>
+    <div class="actions" style="justify-content:flex-end">
+      <button type="button" class="btn" id="lvPick">สแกนไม่ผ่าน? เลือกชื่อ</button>
+      <button type="button" class="btn primary" id="lvPickOk" hidden>ถัดไป</button>
+      <button type="button" class="btn" id="lvCancel1">ยกเลิก</button>
+    </div>
+  </div>
+  <form id="lvForm" hidden autocomplete="off">
+    <div class="lv-card" style="margin-bottom:14px"><img id="lvImg" alt=""><div class="grow"><b id="lvName"></b><div class="small muted" id="lvVia"></div></div></div>
+    <div class="range-row">
+      <label class="f" style="flex:1"><span>ประเภทการลา</span><select id="lvType"></select></label>
+      <label class="f" style="flex:1"><span>ช่วงเวลา</span><select id="lvPart"><option value="full">เต็มวัน</option><option value="am">ครึ่งวันเช้า</option><option value="pm">ครึ่งวันบ่าย</option></select></label>
+    </div>
+    <div class="range-row">
+      <label class="f" style="flex:1"><span>ตั้งแต่วันที่</span><input type="date" id="lvStart" required></label>
+      <label class="f" style="flex:1" id="lvEndWrap"><span>ถึงวันที่</span><input type="date" id="lvEnd"></label>
+    </div>
+    <label class="f"><span>เหตุผล</span><textarea id="lvReason" rows="2" placeholder="เช่น ไม่สบาย, ไปทำธุระที่อำเภอ"></textarea></label>
+    <div class="actions" style="justify-content:flex-end">
+      <button type="button" class="btn" id="lvCancel2">ยกเลิก</button>
+      <button type="submit" class="btn primary" id="lvSubmit">ส่งคำขอลา</button>
+    </div>
+  </form>
+</dialog>
+
 <div class="toast" id="toast"></div>
 
 <script>
@@ -506,11 +600,12 @@ const store = {
 };
 const DEFAULTS = {
   shiftStart: '08:30', shiftEnd: '17:30', grace: 5, cooldown: 60, threshold: 0.5, liveness: true, sound: true, voice: true,
-  workDays: [1, 2, 3, 4, 5, 6], lunchStart: '12:00', lunchEnd: '13:00', lunchScan: true, otAfter: 30, otRound: 30, halfDayHours: 5
+  workDays: [1, 2, 3, 4, 5, 6], leaveQuota: { sick: 30, personal: 3, vacation: 6 }, lunchStart: '12:00', lunchEnd: '13:00', lunchScan: true, otAfter: 30, otRound: 30, halfDayHours: 5
 };
 let employees = [];
 let events = [];      // only the months that have been loaded (see ensureMonth)
 let settings = { ...DEFAULTS };
+let leaves = [];      // leave requests (HR only; the kiosk can file but not read them)
 let calendar = {};    // { 'YYYY-MM-DD': { type: 'work'|'off', note } } overrides the weekly pattern
 let currentUser = null;
 let currentRole = 'kiosk';   // 'hr' or 'kiosk' (scan only); the database enforces the same rules
@@ -523,6 +618,7 @@ const ms = s => s == null ? null : Date.parse(s);
 const empFromRow = r => ({ id: r.id, name: r.name, dept: r.dept || '', descriptors: r.descriptors || [], photo: r.photo, consentAt: ms(r.consent_at), createdAt: ms(r.created_at) });
 const empToRow = e => ({ id: e.id, name: e.name, dept: e.dept || null, descriptors: e.descriptors, photo: e.photo || null, consent_at: iso(e.consentAt), created_at: iso(e.createdAt || Date.now()) });
 const evFromRow = r => ({ id: r.id, empId: r.emp_id, time: ms(r.time), type: r.type, score: r.score, live: r.live, source: r.source, snap: r.snap ?? null });
+const leaveFromRow = r => ({ id: r.id, empId: r.emp_id, type: r.type, start: r.start_date, end: r.end_date, part: r.part, reason: r.reason || '', status: r.status, source: r.source, snap: r.snap, requestedAt: ms(r.requested_at), decidedAt: ms(r.decided_at), note: r.decision_note || '' });
 const evToRow = e => ({ id: e.id, emp_id: e.empId, time: iso(e.time), type: e.type, score: e.score ?? null, live: !!e.live, source: e.source || 'face', snap: e.snap || null });
 
 async function fetchAll(makeQuery) {
@@ -568,14 +664,16 @@ function needData(months, snapDay, rerender) {
   if (waits.length) Promise.all(waits).then(rs => { if (rs.some(Boolean)) rerender(); });
 }
 async function loadAll() {
-  const [emps, cal, set] = await Promise.all([
+  const [emps, cal, set, lv] = await Promise.all([
     fetchAll(() => sb.from('att_employees').select('*').order('name')),
     fetchAll(() => sb.from('att_calendar').select('*')),
-    sb.from('att_settings').select('data').eq('id', 1).maybeSingle()
+    sb.from('att_settings').select('data').eq('id', 1).maybeSingle(),
+    currentRole === 'hr' ? fetchAll(() => sb.from('att_leaves').select('*').order('start_date')) : Promise.resolve([])
   ]);
   if (set.error) throw set.error;
   employees = emps.map(empFromRow);
   calendar = Object.fromEntries(cal.map(r => [r.day, { type: r.type, note: r.note || '' }]));
+  leaves = lv.map(leaveFromRow);
   settings = { ...DEFAULTS, ...(set.data?.data || {}) };
   const today = dayKey(Date.now());
   await Promise.all([ensureMonth(today.slice(0, 7)), ensureSnaps(today)]);
@@ -632,6 +730,8 @@ function refreshView() {
     if (currentView === 'kiosk') renderKioskSide();
     if (currentView === 'employees' && !enrolling) renderEmployees();
     if (currentView === 'reports') renderReports();
+    if (currentView === 'leaves') renderLeaves();
+    renderLeaveBadge();
     if (currentView === 'calendar') renderCalendar();
     tick();
   }, 250);
@@ -650,6 +750,11 @@ function subscribeRealtime() {
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'att_calendar' }, p => {
       if (p.eventType === 'DELETE') delete calendar[p.old.day]; else calendar[p.new.day] = { type: p.new.type, note: p.new.note || '' };
+      refreshView();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'att_leaves' }, p => {
+      leaves = p.eventType === 'DELETE' ? leaves.filter(l => l.id !== p.old.id)
+        : [...leaves.filter(l => l.id !== p.new.id), leaveFromRow(p.new)];
       refreshView();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'att_settings' }, p => {
@@ -751,17 +856,36 @@ function daySummary(emp, key) {
   if (half) { status = (afternoon ? 'ครึ่งวันบ่าย' : 'ครึ่งวันเช้า') + (status === 'ตรงเวลา' ? '' : ' · ' + status); if (cls === 'b-ok') cls = 'b-info'; }
   if (lastOut && early > 0) status += ` · ออกก่อน ${early} นาที`;
   if (missingOut) { status += ' · ไม่สแกนออก'; if (cls === 'b-ok') cls = 'b-warn'; }
-  return { key, info, firstIn, lastOut, late, early, workedMin, regularMin, otMin, lunchMin, present, half, afternoon, dayValue, scheduled: info.work, missingOut, status, cls, evs };
+  const leave = info.work ? leaveOn(emp.id, key) : null;
+  const leaveValue = leave ? (leave.part === 'full' ? 1 : 0.5) : 0;
+  if (leave) {
+    const label = LEAVE_TYPES[leave.type] + (leave.part === 'full' ? '' : PART_LABEL[leave.part]);
+    if (!present) { status = label; cls = 'b-info'; }
+    else status += ' · ' + label;
+  }
+  return { key, info, firstIn, lastOut, late, early, workedMin, regularMin, otMin, lunchMin, present, half, afternoon, dayValue, leave, leaveValue, scheduled: info.work, missingOut, status, cls, evs };
+}
+const LEAVE_TYPES = { sick: 'ลาป่วย', personal: 'ลากิจ', vacation: 'ลาพักร้อน', other: 'ลาอื่นๆ' };
+const PART_LABEL = { full: 'เต็มวัน', am: 'ครึ่งเช้า', pm: 'ครึ่งบ่าย' };
+const addDays = (key, n) => { const d = new Date(key + 'T00:00:00'); d.setDate(d.getDate() + n); return dayKey(d); };
+// approved leave covering this date, if any
+const leaveOn = (empId, key) => leaves.find(l => l.empId === empId && l.status === 'approved' && l.start <= key && l.end >= key) || null;
+// leave days = factory work days in the range (holidays in the calendar are not counted); half day = 0.5
+function leaveDays(l, from = '0000', to = '9999') {
+  let n = 0;
+  for (let k = l.start > from ? l.start : from; k <= l.end && k <= to; k = addDays(k, 1)) if (dayInfo(k).work) n += l.part === 'full' ? 1 : 0.5;
+  return n;
 }
 const fmtDays = n => Number.isInteger(n) ? String(n) : n.toFixed(1);
 // Monthly totals per employee: days actually worked (half days count 0.5) + OT
 function monthSummary(emp, month) {
   const [y, m] = month.split('-').map(Number), days = new Date(y, m, 0).getDate(), today = dayKey(Date.now());
-  const r = { workedDays: 0, halfDays: 0, offDayWorked: 0, lateCount: 0, lateMin: 0, missingOut: 0, regularMin: 0, otMin: 0, lunchMin: 0, lunchDays: 0 };
+  const r = { leave: { sick: 0, personal: 0, vacation: 0, other: 0 }, workedDays: 0, halfDays: 0, offDayWorked: 0, lateCount: 0, lateMin: 0, missingOut: 0, regularMin: 0, otMin: 0, lunchMin: 0, lunchDays: 0 };
   for (let d = 1; d <= days; d++) {
     const key = `${month}-${pad(d)}`;
     if (key > today) break;
     const s = daySummary(emp, key);
+    if (s.leave) r.leave[s.leave.type] += s.leaveValue;
     if (!s.present) continue;
     r.workedDays += s.dayValue;
     if (s.half) r.halfDays++;
@@ -908,6 +1032,7 @@ async function kioskLoop() {
       if (kioskOn) handleKiosk(det, video);
     }
   } catch (e) { console.error(e); }
+  if (leaveIdentify) { $('#lvStatus').className = $('#kStatus').className; $('#lvStatus').textContent = $('#kStatus').textContent === 'มองกล้องเพื่อลงเวลา' ? 'มองกล้องแล้วกระพริบตาช้าๆ เพื่อยืนยันตัวตน' : $('#kStatus').textContent; }
   if (kioskOn) setTimeout(kioskLoop, 60);
 }
 function handleKiosk(det, video) {
@@ -933,6 +1058,7 @@ function handleKiosk(det, video) {
     return;
   }
   if (cand.hits < 2) { setStatus(st, 'info', 'กำลังยืนยันตัวตน…'); return; }
+  if (leaveIdentify) { const cb = leaveIdentify; leaveIdentify = null; cand = null; cb(emp, snapshot(video, det.detection.box), 'ยืนยันด้วยใบหน้า'); return; }
   const score = Math.round((1 - best.distance) * 100);
   const res = recordEvent(emp, { score, live: !!settings.liveness, source: 'face', snap: snapshot(video, det.detection.box) });
   cand = null;
@@ -1097,7 +1223,7 @@ function renderReports() {
   const came = rows.filter(r => r.s.present).length, late = rows.filter(r => r.s.late).length;
   const lunchTotal = rows.reduce((a, r) => a + r.s.lunchMin, 0), eveTotal = rows.reduce((a, r) => a + r.s.otMin, 0);
   $('#rStats').innerHTML = statCards([
-    ['มาทำงาน', `${came} คน`], ['หยุด / ไม่ได้มา', `${employees.length - came} คน`], ['มาสาย', late],
+    ['มาทำงาน', `${came} คน`], ['ลา / หยุด', `${rows.filter(r => r.s.leave && !r.s.present).length} / ${rows.filter(r => !r.s.leave && !r.s.present).length} คน`], ['มาสาย', late],
     ['OT เที่ยง / เย็น', `${fmtMin(lunchTotal)} / ${fmtMin(eveTotal)}`]
   ]);
   $('#rBody').innerHTML = rows.length ? rows.map(({ e, s }) => `
@@ -1123,6 +1249,7 @@ function renderReports() {
       <td><button class="btn sm danger" data-delev="${ev.id}">ลบ</button></td></tr>`;
   }).join('') : '<tr><td colspan="8" class="empty">ไม่มีบันทึกในวันนี้</td></tr>';
 }
+const leaveCell = r => { const parts = Object.entries(r.leave).filter(([, v]) => v).map(([t, v]) => `${LEAVE_TYPES[t].replace('ลา', '')} ${fmtDays(v)}`); return parts.length ? parts.join(', ') : '-'; };
 function renderMonthSummary() {
   const m = $('#rMonth').value || dayKey(Date.now()).slice(0, 7);
   needData([m], null, renderMonthSummary);
@@ -1135,13 +1262,14 @@ function renderMonthSummary() {
     const r = monthSummary(e, m);
     return `<tr><td>${esc(e.name)}</td><td>${esc(e.dept || '-')}</td>
       <td class="num"><b>${fmtDays(r.workedDays)}</b> วัน${r.halfDays || r.offDayWorked ? ` <span class="small muted">(${[r.halfDays ? `ครึ่งวัน ${r.halfDays}` : '', r.offDayWorked ? `วันหยุด ${r.offDayWorked}` : ''].filter(Boolean).join(', ')})</span>` : ''}</td>
+      <td class="num">${leaveCell(r)}</td>
       <td class="num">${r.lateCount ? `<span class="badge b-warn">${r.lateCount} ครั้ง / ${r.lateMin} น.</span>` : '-'}</td>
       <td class="num">${r.missingOut ? `<span class="badge b-warn">${r.missingOut}</span>` : '-'}</td>
       <td class="num">${fmtMin(r.regularMin)}</td>
       <td class="num">${r.lunchMin ? `${fmtMin(r.lunchMin)} <span class="small muted">(${r.lunchDays} ครั้ง)</span>` : '-'}</td>
       <td class="num">${r.otMin ? fmtMin(r.otMin) : '-'}</td>
       <td class="num"><b>${r.lunchMin + r.otMin ? fmtMin(r.lunchMin + r.otMin) : '-'}</b></td></tr>`;
-  }).join('') : '<tr><td colspan="10" class="empty">ยังไม่มีพนักงาน</td></tr>';
+  }).join('') : '<tr><td colspan="11" class="empty">ยังไม่มีพนักงาน</td></tr>';
 }
 $('#rLog').addEventListener('click', async ev => {
   const b = ev.target.closest('[data-delev]'); if (!b) return;
@@ -1169,9 +1297,9 @@ function downloadFile(name, content, type) {
 }
 const csvCell = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
 const toCsv = rows => '﻿' + rows.map(r => r.map(csvCell).join(',')).join('\r\n');
-const HEAD = ['วันที่', 'ประเภทวัน', 'ชื่อ', 'แผนก', 'มาทำงาน (วัน)', 'เข้างาน', 'ออกงาน', 'ชั่วโมงทำงาน', 'ชม.ปกติ', 'OT เที่ยง (ชม.)', 'OT เย็น (ชม.)', 'สาย(นาที)', 'ออกก่อน(นาที)', 'สถานะ'];
+const HEAD = ['วันที่', 'ประเภทวัน', 'ชื่อ', 'แผนก', 'มาทำงาน (วัน)', 'เข้างาน', 'ออกงาน', 'ชั่วโมงทำงาน', 'ชม.ปกติ', 'OT เที่ยง (ชม.)', 'OT เย็น (ชม.)', 'สาย(นาที)', 'ออกก่อน(นาที)', 'ลา (วัน)', 'สถานะ'];
 const csvRow = (key, e, s) => [key, DAY_TYPE_LABEL[s.info.type] + (s.info.note ? ` (${s.info.note})` : ''), e.name, e.dept, s.dayValue,
-  s.firstIn ? hm(s.firstIn) : '', s.lastOut ? hm(s.lastOut) : '', s.workedMin != null ? toH(s.workedMin) : '', toH(s.regularMin), toH(s.lunchMin), toH(s.otMin), s.late, s.early, s.status];
+  s.firstIn ? hm(s.firstIn) : '', s.lastOut ? hm(s.lastOut) : '', s.workedMin != null ? toH(s.workedMin) : '', toH(s.regularMin), toH(s.lunchMin), toH(s.otMin), s.late, s.early, s.leaveValue || '', s.status];
 $('#btnExportDay').addEventListener('click', async () => {
   const key = $('#rDate').value || dayKey(Date.now());
   await ensureMonth(key.slice(0, 7));
@@ -1190,10 +1318,10 @@ $('#btnExportMonth').addEventListener('click', async () => {
 $('#btnExportSummary').addEventListener('click', async () => {
   const m = $('#rMonth').value; if (!m) return;
   await ensureMonth(m);
-  const rows = [['เดือน', 'ชื่อ', 'แผนก', 'มาทำงาน (วัน)', 'ครึ่งวัน (ครั้ง)', 'มาวันหยุดโรงงาน (วัน)', 'สาย (ครั้ง)', 'สายรวม (นาที)', 'ไม่สแกนออก (ครั้ง)', 'ชม.ทำงานปกติ', 'OT เที่ยง (ครั้ง)', 'OT เที่ยง (ชม.)', 'OT เย็น (ชม.)', 'OT รวม (ชม.)']];
+  const rows = [['เดือน', 'ชื่อ', 'แผนก', 'มาทำงาน (วัน)', 'ครึ่งวัน (ครั้ง)', 'มาวันหยุดโรงงาน (วัน)', 'สาย (ครั้ง)', 'สายรวม (นาที)', 'ไม่สแกนออก (ครั้ง)', 'ชม.ทำงานปกติ', 'OT เที่ยง (ครั้ง)', 'OT เที่ยง (ชม.)', 'OT เย็น (ชม.)', 'OT รวม (ชม.)', 'ลาป่วย (วัน)', 'ลากิจ (วัน)', 'ลาพักร้อน (วัน)', 'ลาอื่นๆ (วัน)']];
   employees.forEach(e => {
     const r = monthSummary(e, m);
-    rows.push([m, e.name, e.dept, r.workedDays, r.halfDays, r.offDayWorked, r.lateCount, r.lateMin, r.missingOut, toH(r.regularMin), r.lunchDays, toH(r.lunchMin), toH(r.otMin), toH(r.lunchMin + r.otMin)]);
+    rows.push([m, e.name, e.dept, r.workedDays, r.halfDays, r.offDayWorked, r.lateCount, r.lateMin, r.missingOut, toH(r.regularMin), r.lunchDays, toH(r.lunchMin), toH(r.otMin), toH(r.lunchMin + r.otMin), r.leave.sick, r.leave.personal, r.leave.vacation, r.leave.other]);
   });
   downloadFile(`attendance-summary-${m}.csv`, toCsv(rows), 'text/csv');
 });
@@ -1291,11 +1419,13 @@ $('#settingsForm').addEventListener('submit', ev => {
 $('#btnBackup').addEventListener('click', async () => {
   toast('กำลังเตรียมไฟล์สำรอง…');
   try {
-    const [emps, evs] = await Promise.all([
+    const [emps, evs, lvs] = await Promise.all([
       fetchAll(() => sb.from('att_employees').select('*').order('name')),
+      fetchAll(() => sb.from('att_leaves').select('id,emp_id,type,start_date,end_date,part,reason,status,source,requested_at,decided_by,decided_at,decision_note')),
       fetchAll(() => sb.from('att_events').select('id,emp_id,time,type,score,live,source').order('time'))
     ]);
-    downloadFile(`face-attendance-backup-${dayKey(Date.now())}.json`, JSON.stringify({ version: 3, exportedAt: new Date().toISOString(), employees: emps.map(empFromRow), events: evs.map(evFromRow), settings, calendar }), 'application/json');
+    const leavesBackup = lvs;
+    downloadFile(`face-attendance-backup-${dayKey(Date.now())}.json`, JSON.stringify({ version: 3, exportedAt: new Date().toISOString(), employees: emps.map(empFromRow), events: evs.map(evFromRow), leaves: leavesBackup, settings, calendar }), 'application/json');
   } catch (e) { toast('สำรองข้อมูลไม่สำเร็จ: ' + e.message, 'err'); }
 });
 async function reloadData() {
@@ -1312,6 +1442,7 @@ $('#fileImport').addEventListener('change', async ev => {
     const up = async (table, rows) => { for (let i = 0; i < rows.length; i += 500) { const { error } = await sb.from(table).upsert(rows.slice(i, i + 500)); if (error) throw error; } };
     await up('att_employees', data.employees.map(empToRow));
     await up('att_events', data.events.map(e => evToRow({ ...e, snap: null })));
+    if (Array.isArray(data.leaves)) await up('att_leaves', data.leaves);
     await up('att_calendar', Object.entries(data.calendar || {}).map(([day, o]) => ({ day, type: o.type === 'off' ? 'off' : 'work', note: o.note || null })));
     if (data.settings) { settings = { ...DEFAULTS, ...data.settings }; await saveSettings(); }
     await reloadData();
@@ -1327,7 +1458,7 @@ $('#btnClearEvents').addEventListener('click', async () => {
 $('#btnClearAll').addEventListener('click', async () => {
   if (!confirm('ลบข้อมูลทั้งหมด รวมถึงพนักงานและใบหน้า? ไม่สามารถกู้คืนได้')) return;
   if (prompt('พิมพ์คำว่า ลบ เพื่อยืนยัน') !== 'ลบ') return;
-  for (const [table, col] of [['att_events', 'id'], ['att_employees', 'id'], ['att_calendar', 'day']]) {
+  for (const [table, col] of [['att_events', 'id'], ['att_leaves', 'id'], ['att_employees', 'id'], ['att_calendar', 'day']]) {
     if (!(await dbCall(sb.from(table).delete().not(col, 'is', null)))) return;
   }
   outbox = []; store.set('outbox', outbox); await reloadData(); toast('ลบข้อมูลทั้งหมดแล้ว', 'ok');
@@ -1371,6 +1502,7 @@ function showView(name) {
   if (name === 'kiosk') { renderKioskSide(); startKiosk(); }
   if (name === 'employees') renderEmployees();
   if (name === 'reports') renderReports();
+  if (name === 'leaves') renderLeaves();
   if (name === 'calendar') renderCalendar();
   if (name === 'settings') { renderSettings(); renderUsers(); }
 }
@@ -1389,6 +1521,189 @@ function tick() {
 setInterval(tick, 1000); tick();
 $('#rDate').value = dayKey(Date.now());
 $('#rMonth').value = dayKey(Date.now()).slice(0, 7);
+
+/* ---------- leave: request at the kiosk, approve in HR ---------- */
+let leaveIdentify = null, lvEmp = null, lvSnap = null;
+const leaveTypeOptions = () => Object.entries(LEAVE_TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
+$('#lvType').innerHTML = leaveTypeOptions(); $('#hlType').innerHTML = leaveTypeOptions();
+const fmtDate = k => new Date(k + 'T00:00:00').toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' });
+const fmtRange = l => (l.start === l.end ? fmtDate(l.start) : `${fmtDate(l.start)} – ${fmtDate(l.end)}`) + (l.part === 'full' ? '' : ` (${PART_LABEL[l.part]})`);
+function syncEnd(partSel, endWrap, startInp, endInp) {
+  const half = $(partSel).value !== 'full';
+  $(endWrap).style.display = half ? 'none' : '';
+  if (half || !$(endInp).value || $(endInp).value < $(startInp).value) $(endInp).value = $(startInp).value;
+}
+function validLeave(start, end, part) {
+  if (!start) return 'กรุณาเลือกวันที่';
+  if (end < start) return 'วันที่สิ้นสุดต้องไม่ก่อนวันเริ่ม';
+  if (part !== 'full' && end !== start) return 'ลาครึ่งวันเลือกได้วันเดียว';
+  if ((new Date(end) - new Date(start)) / 86400000 > 60) return 'ลาได้ครั้งละไม่เกิน 60 วัน';
+  return null;
+}
+
+/* kiosk dialog */
+function openLeaveDialog() {
+  lvEmp = null; lvSnap = null;
+  $('#lvStep1').hidden = false; $('#lvForm').hidden = true; $('#lvPickWrap').hidden = true; $('#lvPickOk').hidden = true; $('#lvPick').hidden = false;
+  $('#lvStatus').className = 'status info'; $('#lvStatus').textContent = 'มองกล้องแล้วกระพริบตาช้าๆ เพื่อยืนยันตัวตน';
+  $('#leaveDlg').showModal();
+  if (stream && kioskOn) {
+    $('#lvVideo').srcObject = stream; $('#lvVideo').play().catch(() => {});
+    cand = null; pauseUntil = 0;
+    leaveIdentify = (emp, snap, via) => showLeaveForm(emp, snap, via);
+  } else showLeavePick();
+}
+function closeLeaveDialog() { leaveIdentify = null; $('#lvVideo').srcObject = null; if ($('#leaveDlg').open) $('#leaveDlg').close(); }
+function showLeavePick() {
+  leaveIdentify = null;
+  $('#lvPickWrap').hidden = false; $('#lvPickOk').hidden = false; $('#lvPick').hidden = true;
+  $('#lvStatus').className = 'status warn'; $('#lvStatus').textContent = 'เลือกชื่อของคุณ ระบบจะถ่ายรูปไว้ให้ HR ตรวจสอบ';
+  $('#lvSearch').value = ''; renderLvPick();
+}
+function renderLvPick() {
+  const q = $('#lvSearch').value.trim().toLowerCase();
+  const list = employees.filter(e => !q || e.name.toLowerCase().includes(q) || (e.dept || '').toLowerCase().includes(q));
+  $('#lvPickList').innerHTML = list.length ? list.map(e => `<label><input type="radio" name="lvEmp" value="${e.id}">
+    ${e.photo ? `<img class="avatar" src="${esc(e.photo)}" alt="">` : '<span class="avatar"></span>'}
+    <span>${esc(e.name)}${e.dept ? ` <span class="muted small">${esc(e.dept)}</span>` : ''}</span></label>`).join('') : '<div class="empty small">ไม่พบชื่อ</div>';
+}
+function showLeaveForm(emp, snap, via) {
+  lvEmp = emp; lvSnap = snap;
+  $('#lvVideo').srcObject = null;
+  $('#lvStep1').hidden = true; $('#lvForm').hidden = false;
+  $('#lvImg').src = snap || emp.photo || ''; $('#lvImg').style.visibility = (snap || emp.photo) ? 'visible' : 'hidden';
+  $('#lvName').textContent = emp.name; $('#lvVia').textContent = via;
+  const today = dayKey(Date.now());
+  $('#lvType').value = 'sick'; $('#lvPart').value = 'full'; $('#lvStart').value = today; $('#lvEnd').value = today; $('#lvReason').value = '';
+  $('#lvStart').min = addDays(today, -7);
+  syncEnd('#lvPart', '#lvEndWrap', '#lvStart', '#lvEnd');
+  beep(true);
+}
+$('#btnLeave').addEventListener('click', openLeaveDialog);
+$('#lvPick').addEventListener('click', showLeavePick);
+$('#lvSearch').addEventListener('input', renderLvPick);
+$('#lvPickOk').addEventListener('click', () => {
+  const picked = document.querySelector('#lvPickList input:checked'), emp = picked && empById(picked.value);
+  if (!emp) { toast('กรุณาเลือกชื่อ', 'err'); return; }
+  const v = $('#kVideo');
+  let snap = null;
+  if (stream && v.videoWidth) { const side = Math.min(v.videoWidth, v.videoHeight) / 1.7; snap = snapshot(v, { x: (v.videoWidth - side) / 2, y: (v.videoHeight - side) / 2, width: side, height: side }); }
+  showLeaveForm(emp, snap, 'เลือกชื่อ (มีรูปจากกล้องให้ HR ตรวจ)');
+});
+$('#lvCancel1').addEventListener('click', closeLeaveDialog);
+$('#lvCancel2').addEventListener('click', closeLeaveDialog);
+$('#leaveDlg').addEventListener('close', () => { leaveIdentify = null; });
+['#lvPart', '#lvStart'].forEach(id => $(id).addEventListener('change', () => syncEnd('#lvPart', '#lvEndWrap', '#lvStart', '#lvEnd')));
+$('#lvForm').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  if (!lvEmp) return;
+  const part = $('#lvPart').value, start = $('#lvStart').value, end = part === 'full' ? ($('#lvEnd').value || start) : start;
+  const bad = validLeave(start, end, part); if (bad) { toast(bad, 'err'); return; }
+  $('#lvSubmit').disabled = true;
+  const row = { id: uid(), emp_id: lvEmp.id, type: $('#lvType').value, start_date: start, end_date: end, part, reason: $('#lvReason').value.trim() || null, status: 'pending', source: 'kiosk', snap: lvSnap };
+  const { error } = await sb.from('att_leaves').insert(row);
+  $('#lvSubmit').disabled = false;
+  if (error) { toast(navigator.onLine ? 'ส่งคำขอลาไม่สำเร็จ: ' + error.message : 'ส่งคำขอลาไม่ได้ขณะออฟไลน์ กรุณาลองใหม่เมื่อมีอินเทอร์เน็ต', 'err'); return; }
+  if (currentRole === 'hr') leaves.push(leaveFromRow({ ...row, requested_at: new Date().toISOString() }));
+  const name = lvEmp.name;
+  closeLeaveDialog();
+  setStatus($('#kStatus'), 'ok', `✓ ส่งคำขอลาของ ${name} แล้ว รอ HR อนุมัติ`);
+  pauseUntil = Date.now() + 2500;
+  toast('ส่งคำขอลาแล้ว รอ HR อนุมัติ', 'ok');
+  speak(`ส่งคำขอลาแล้วค่ะ คุณ${name}`);
+  renderLeaveBadge();
+});
+
+/* HR side */
+function renderLeaveBadge() {
+  const n = currentRole === 'hr' ? leaves.filter(l => l.status === 'pending').length : 0;
+  $('#leaveBadge').hidden = !n; $('#leaveBadge').textContent = n;
+}
+const STATUS_BADGE = { pending: ['b-warn', 'รออนุมัติ'], approved: ['b-ok', 'อนุมัติแล้ว'], rejected: ['b-err', 'ไม่อนุมัติ'], cancelled: ['b-mute', 'ยกเลิก'] };
+function renderLeaves() {
+  renderLeaveBadge();
+  const empOpts = employees.map(e => `<option value="${e.id}">${esc(e.name)}${e.dept ? ' · ' + esc(e.dept) : ''}</option>`).join('');
+  const keepHl = $('#hlEmp').value; $('#hlEmp').innerHTML = empOpts; if (keepHl) $('#hlEmp').value = keepHl;
+  const keepF = $('#lvEmpFilter').value; $('#lvEmpFilter').innerHTML = '<option value="">ทุกคน</option>' + empOpts; $('#lvEmpFilter').value = keepF;
+  if (!$('#hlStart').value) { $('#hlStart').value = dayKey(Date.now()); syncEnd('#hlPart', '#hlEndWrap', '#hlStart', '#hlEnd'); }
+  if (!$('#lvYear').value) $('#lvYear').value = new Date().getFullYear();
+  const q = settings.leaveQuota || DEFAULTS.leaveQuota;
+  $('#qSick').value = q.sick; $('#qPersonal').value = q.personal; $('#qVacation').value = q.vacation;
+
+  const pending = leaves.filter(l => l.status === 'pending').sort((a, b) => a.requestedAt - b.requestedAt);
+  $('#pendCount').textContent = pending.length ? `(${pending.length})` : '';
+  $('#pendList').innerHTML = pending.length ? pending.map(l => {
+    const e = empById(l.empId), img = l.snap || e?.photo;
+    return `<div class="lv-card">${img ? `<img src="${esc(img)}" alt="">` : '<div class="avatar"></div>'}
+      <div class="grow"><b>${esc(e ? e.name : '(ลบแล้ว)')}</b> <span class="badge b-info">${LEAVE_TYPES[l.type]}</span>
+        <div>${fmtRange(l)} · ${fmtDays(leaveDays(l))} วัน</div>
+        ${l.reason ? `<div class="small">"${esc(l.reason)}"</div>` : ''}
+        <div class="small muted">ขอเมื่อ ${new Date(l.requestedAt).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'short' })}${l.snap ? ' · รูปตอนขอลา' : ''}</div>
+        <div class="actions"><button class="btn sm primary" data-lvapprove="${l.id}">อนุมัติ</button><button class="btn sm danger" data-lvreject="${l.id}">ไม่อนุมัติ</button></div>
+      </div></div>`;
+  }).join('') : '<div class="empty small">ไม่มีคำขอรออนุมัติ</div>';
+
+  const year = String($('#lvYear').value || new Date().getFullYear()), from = year + '-01-01', to = year + '-12-31', who = $('#lvEmpFilter').value;
+  const hist = leaves.filter(l => l.start <= to && l.end >= from && (!who || l.empId === who)).sort((a, b) => b.start.localeCompare(a.start));
+  $('#lvBody').innerHTML = hist.length ? hist.map(l => {
+    const e = empById(l.empId), [cls, label] = STATUS_BADGE[l.status];
+    return `<tr><td>${esc(e ? e.name : '(ลบแล้ว)')}</td><td>${LEAVE_TYPES[l.type]}</td><td>${fmtRange(l)}</td><td class="num">${fmtDays(leaveDays(l))}</td>
+      <td style="white-space:normal;max-width:220px">${esc(l.reason) || '-'}${l.note ? `<div class="small muted">HR: ${esc(l.note)}</div>` : ''}</td>
+      <td><span class="badge ${cls}">${label}</span>${l.source === 'hr' ? ' <span class="small muted">HR ลงให้</span>' : ''}</td>
+      <td>${l.status === 'approved' || l.status === 'pending' ? `<button class="btn sm" data-lvcancel="${l.id}">ยกเลิก</button>` : ''}</td></tr>`;
+  }).join('') : '<tr><td colspan="7" class="empty">ไม่มีประวัติการลาในปีนี้</td></tr>';
+
+  const used = emp => { const u = { sick: 0, personal: 0, vacation: 0, other: 0 }; leaves.filter(l => l.empId === emp.id && l.status === 'approved').forEach(l => u[l.type] += leaveDays(l, from, to)); return u; };
+  const cell = (n, max) => max ? `<span class="badge ${n > max ? 'b-err' : n >= max ? 'b-warn' : 'b-mute'}">${fmtDays(n)} / ${max}</span>` : (n ? fmtDays(n) : '-');
+  $('#quotaBody').innerHTML = employees.length ? employees.filter(e => !who || e.id === who).map(e => { const u = used(e);
+    return `<tr><td>${esc(e.name)}</td><td>${cell(u.sick, q.sick)}</td><td>${cell(u.personal, q.personal)}</td><td>${cell(u.vacation, q.vacation)}</td><td>${u.other ? fmtDays(u.other) : '-'}</td></tr>`;
+  }).join('') : '<tr><td colspan="5" class="empty">ยังไม่มีพนักงาน</td></tr>';
+}
+async function decideLeave(id, status, note) {
+  const { error } = await sb.from('att_leaves').update({ status, decided_by: currentUser.id, decided_at: new Date().toISOString(), decision_note: note || null }).eq('id', id);
+  if (error) { toast('บันทึกไม่สำเร็จ: ' + error.message, 'err'); return false; }
+  const l = leaves.find(x => x.id === id); if (l) Object.assign(l, { status, decidedAt: Date.now(), note: note || '' });
+  renderLeaves(); return true;
+}
+$('#pendList').addEventListener('click', async ev => {
+  const ok = ev.target.closest('[data-lvapprove]'), no = ev.target.closest('[data-lvreject]');
+  if (ok) {
+    const l = leaves.find(x => x.id === ok.dataset.lvapprove);
+    const clash = leaves.find(x => x.id !== l.id && x.empId === l.empId && x.status === 'approved' && x.start <= l.end && x.end >= l.start);
+    if (clash && !confirm(`มีวันลาที่อนุมัติแล้วซ้อนกัน (${LEAVE_TYPES[clash.type]} ${fmtRange(clash)}) อนุมัติต่อหรือไม่?`)) return;
+    if (await decideLeave(l.id, 'approved')) toast('อนุมัติแล้ว', 'ok');
+  }
+  if (no) {
+    const note = prompt('เหตุผลที่ไม่อนุมัติ (ไม่บังคับ)');
+    if (note === null) return;
+    if (await decideLeave(no.dataset.lvreject, 'rejected', note.trim())) toast('บันทึกว่าไม่อนุมัติแล้ว', 'ok');
+  }
+});
+$('#lvBody').addEventListener('click', async ev => {
+  const b = ev.target.closest('[data-lvcancel]'); if (!b) return;
+  if (!confirm('ยกเลิกการลานี้? วันที่ลาจะไม่ถูกนับ')) return;
+  if (await decideLeave(b.dataset.lvcancel, 'cancelled')) toast('ยกเลิกแล้ว', 'ok');
+});
+['#lvYear', '#lvEmpFilter'].forEach(id => $(id).addEventListener('change', renderLeaves));
+['#hlPart', '#hlStart'].forEach(id => $(id).addEventListener('change', () => syncEnd('#hlPart', '#hlEndWrap', '#hlStart', '#hlEnd')));
+$('#hrLeaveForm').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  const part = $('#hlPart').value, start = $('#hlStart').value, end = part === 'full' ? ($('#hlEnd').value || start) : start;
+  const bad = validLeave(start, end, part); if (bad) { toast(bad, 'err'); return; }
+  const now = new Date().toISOString();
+  const row = { id: uid(), emp_id: $('#hlEmp').value, type: $('#hlType').value, start_date: start, end_date: end, part, reason: $('#hlReason').value.trim() || null, status: 'approved', source: 'hr', requested_at: now, decided_by: currentUser.id, decided_at: now };
+  if (!row.emp_id) { toast('กรุณาเลือกพนักงาน', 'err'); return; }
+  if (!(await dbCall(sb.from('att_leaves').insert(row)))) return;
+  leaves.push(leaveFromRow(row));
+  $('#hlReason').value = '';
+  toast(`บันทึก${LEAVE_TYPES[row.type]}ให้ ${empById(row.emp_id)?.name || ''} แล้ว`, 'ok');
+  renderLeaves();
+});
+$('#quotaForm').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  settings.leaveQuota = { sick: Math.max(0, Number($('#qSick').value) || 0), personal: Math.max(0, Number($('#qPersonal').value) || 0), vacation: Math.max(0, Number($('#qVacation').value) || 0) };
+  if (await saveSettings()) { toast('บันทึกสิทธิ์ลาแล้ว', 'ok'); renderLeaves(); }
+});
 
 /* ---------- users & passwords (HR only; enforced by the att-admin edge function) ---------- */
 const LOGIN_DOMAIN = '@att.local';
@@ -1510,14 +1825,14 @@ async function afterLogin(user) {
   $('#loading').style.display = 'grid';
   try {
     await loadAll();
-    store.set('boot', { userId: user.id, role: currentRole, employees, settings, calendar, savedAt: Date.now() });
+    store.set('boot', { userId: user.id, role: currentRole, employees, settings, calendar, leaves, savedAt: Date.now() });
   } catch (e) {
     if (!mine) throw e;
-    employees = mine.employees; settings = { ...DEFAULTS, ...mine.settings }; calendar = mine.calendar;
+    employees = mine.employees; settings = { ...DEFAULTS, ...mine.settings }; calendar = mine.calendar; leaves = mine.leaves || [];
     bootedOffline = true;
     toast(`ออฟไลน์: ใช้ข้อมูลที่บันทึกไว้เมื่อ ${new Date(mine.savedAt).toLocaleString('th-TH')} · การสแกนจะส่งขึ้นระบบเมื่อเน็ตกลับมา`, 'warn');
   }
-  buildMatcher(); subscribeRealtime(); flushOutbox(); renderSync();
+  buildMatcher(); subscribeRealtime(); flushOutbox(); renderSync(); renderLeaveBadge();
   $('#userEmail').textContent = loginName(user.email);
   $('#loading').style.display = 'none';
   renderKioskSide(); tick();
