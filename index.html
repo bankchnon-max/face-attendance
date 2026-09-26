@@ -540,14 +540,14 @@ function mergeEvents(list) {
   events = [...byId.values()].sort((a, b) => a.time - b.time);
 }
 // Events are loaded one month at a time (without photos) to keep things fast
-const monthLoads = new Map();
+const monthLoads = new Map(), monthFailedAt = new Map();
 function ensureMonth(month) {
   if (monthLoads.has(month)) return monthLoads.get(month);
   const [y, m] = month.split('-').map(Number);
   const from = new Date(y, m - 1, 1).toISOString(), to = new Date(y, m, 1).toISOString();
   const p = fetchAll(() => sb.from('att_events').select('id,emp_id,time,type,score,live,source').gte('time', from).lt('time', to).order('time'))
     .then(rows => { mergeEvents(rows.map(evFromRow)); return true; })
-    .catch(err => { monthLoads.delete(month); toast('โหลดข้อมูลลงเวลาไม่สำเร็จ: ' + err.message, 'err'); return false; });
+    .catch(err => { monthLoads.delete(month); monthFailedAt.set(month, Date.now()); if (navigator.onLine) toast('โหลดข้อมูลลงเวลาไม่สำเร็จ: ' + err.message, 'err'); return false; });
   monthLoads.set(month, p);
   return p;
 }
@@ -563,7 +563,7 @@ function ensureSnaps(key) {
 }
 // Make sure the data a view needs is loaded, then re-render it once
 function needData(months, snapDay, rerender) {
-  const waits = months.filter(m => !monthLoads.has(m)).map(ensureMonth);
+  const waits = months.filter(m => !monthLoads.has(m) && Date.now() - (monthFailedAt.get(m) || 0) > 30000).map(ensureMonth);
   if (snapDay && !snapLoads.has(snapDay)) waits.push(ensureSnaps(snapDay));
   if (waits.length) Promise.all(waits).then(rs => { if (rs.some(Boolean)) rerender(); });
 }
@@ -618,7 +618,7 @@ async function flushOutbox() {
   if (outbox.length && !lastSyncError) flushOutbox();
 }
 setInterval(flushOutbox, 20000);
-addEventListener('online', flushOutbox);
+addEventListener('online', () => { flushOutbox(); if (bootedOffline && currentUser) { bootedOffline = false; reloadData().catch(() => { bootedOffline = true; }); } });
 function renderSync() {
   const el = $('#sync'); if (!el) return;
   if (outbox.length) { el.className = 'sync warn'; el.textContent = `รอส่ง ${outbox.length} รายการ`; el.title = lastSyncError || 'กำลังส่งข้อมูล'; }
@@ -789,6 +789,8 @@ function recordEvent(emp, { score = null, live = false, source = 'face', snap = 
   if (last && now - last.time < settings.cooldown * 1000) return { dup: true, last };
   const todays = mine.filter(e => dayKey(e.time) === today);
   let type = todays.some(e => e.type === 'in') ? 'out' : 'in';
+  const lastToday = todays[todays.length - 1];
+  if (type === 'out' && lastToday?.type === 'in' && now - lastToday.time < MIN_OUT_AFTER_IN * 60000) return { dup: true, last: lastToday };
   if (type === 'out' && settings.lunchScan && !lunchOutMode && inLunchWindow(now)) {
     const prev = todays.find(e => e.type === 'lunch');
     if (prev) return { dup: true, last: prev };
@@ -803,6 +805,7 @@ function recordEvent(emp, { score = null, live = false, source = 'face', snap = 
   return { ev };
 }
 const TYPE_LABEL = { in: 'เข้างาน', out: 'ออกงาน', lunch: 'OT เที่ยง' };
+const MIN_OUT_AFTER_IN = 30; // minutes: scanning again sooner than this after checking in is treated as a repeat
 function renderLunchBanner() {
   const show = settings.lunchScan && inLunchWindow();
   $('#lunchBanner').classList.toggle('show', show);
@@ -1346,7 +1349,10 @@ $('#manualDlg').addEventListener('close', () => {
   const picked = document.querySelector('#mList input:checked');
   const emp = picked && empById(picked.value);
   if (!emp) { toast('กรุณาเลือกชื่อพนักงาน', 'err'); return; }
-  showResult(emp, recordEvent(emp, { source: 'manual' }));
+  const v = $('#kVideo');
+  let snap = null;
+  if (stream && v.videoWidth) { const side = Math.min(v.videoWidth, v.videoHeight) / 1.7; snap = snapshot(v, { x: (v.videoWidth - side) / 2, y: (v.videoHeight - side) / 2, width: side, height: side }); }
+  showResult(emp, recordEvent(emp, { source: 'manual', snap }));
 });
 $('#btnFull').addEventListener('click', () => {
   if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen?.().catch(() => {});
@@ -1369,8 +1375,10 @@ function showView(name) {
   if (name === 'settings') { renderSettings(); renderUsers(); }
 }
 $('#nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) showView(b.dataset.view); });
+let tickDay = dayKey(Date.now());
 function tick() {
   const now = new Date();
+  if (dayKey(now) !== tickDay) { tickDay = dayKey(now); if (currentUser) renderKioskSide(); }
   $('#bigClock').textContent = hms(now);
   $('#clockSm').textContent = hm(now);
   const info = dayInfo(dayKey(now));
@@ -1478,21 +1486,37 @@ function showLogin(msg) {
   $('#btnLogin').disabled = false;
   setTimeout(() => $('#lEmail').focus(), 50);
 }
+let bootedOffline = false;
 async function afterLogin(user) {
+  const cached = store.get('boot', null), mine = cached?.userId === user.id ? cached : null;
   const { data, error } = await sb.from('att_staff').select('user_id, role').eq('user_id', user.id).maybeSingle();
-  if (error || !data) {
+  let role;
+  if (error) {
+    // network problem: keep the login and fall back to the last saved copy
+    if (!mine) throw new Error('เชื่อมต่อระบบไม่ได้ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่');
+    role = mine.role;
+  } else if (!data) {
+    store.set('boot', null);
     await sb.auth.signOut();
     showLogin(`บัญชี ${loginName(user.email)} ยังไม่ได้รับสิทธิ์ใช้งาน กรุณาติดต่อ HR`);
     return;
-  }
+  } else role = data.role;
   currentUser = user;
-  currentRole = data.role === 'hr' ? 'hr' : 'kiosk';
+  currentRole = role === 'hr' ? 'hr' : 'kiosk';
   document.body.classList.toggle('role-kiosk', currentRole !== 'hr');
   $('#roleTag').textContent = currentRole === 'hr' ? 'HR' : 'เครื่องสแกน';
   $('#login').style.display = 'none';
   $('#loadingMsg').textContent = 'กำลังโหลดข้อมูล…';
   $('#loading').style.display = 'grid';
-  await loadAll();
+  try {
+    await loadAll();
+    store.set('boot', { userId: user.id, role: currentRole, employees, settings, calendar, savedAt: Date.now() });
+  } catch (e) {
+    if (!mine) throw e;
+    employees = mine.employees; settings = { ...DEFAULTS, ...mine.settings }; calendar = mine.calendar;
+    bootedOffline = true;
+    toast(`ออฟไลน์: ใช้ข้อมูลที่บันทึกไว้เมื่อ ${new Date(mine.savedAt).toLocaleString('th-TH')} · การสแกนจะส่งขึ้นระบบเมื่อเน็ตกลับมา`, 'warn');
+  }
   buildMatcher(); subscribeRealtime(); flushOutbox(); renderSync();
   $('#userEmail').textContent = loginName(user.email);
   $('#loading').style.display = 'none';
@@ -1509,7 +1533,9 @@ $('#loginForm').addEventListener('submit', async ev => {
   try { await afterLogin(data.user); } catch (e) { showLogin('โหลดข้อมูลไม่สำเร็จ: ' + e.message); }
 });
 $('#btnLogout').addEventListener('click', async () => {
+  if (!outbox.length && !confirm('ออกจากระบบ? ต้องใส่ชื่อผู้ใช้และรหัสผ่านใหม่เพื่อเข้าใช้อีกครั้ง')) return;
   if (outbox.length && !confirm(`ยังมีข้อมูลลงเวลารอส่ง ${outbox.length} รายการ ถ้าออกจากระบบตอนนี้จะส่งเมื่อเข้าสู่ระบบครั้งถัดไป ต้องการออกจากระบบหรือไม่?`)) return;
+  store.set('boot', null);
   await sb.auth.signOut();
   location.reload();
 });

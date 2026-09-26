@@ -1,5 +1,5 @@
 -- Face attendance app schema (applied to Supabase as migrations
--- att_face_attendance_schema + att_move_is_staff_to_private_schema + att_drop_employee_code + att_roles_hr_and_kiosk).
+-- att_face_attendance_schema + att_move_is_staff_to_private_schema + att_drop_employee_code + att_roles_hr_and_kiosk + att_split_write_policies_and_snap_retention).
 -- Roles: hr = everything; kiosk = read what scanning needs + add scans only.
 -- Only users listed in att_staff can read or write anything.
 
@@ -100,10 +100,19 @@ create policy att_events_update on public.att_events for update to authenticated
 create policy att_events_delete on public.att_events for delete to authenticated using ((select att_private.is_hr()));
 
 create policy att_calendar_read on public.att_calendar for select to authenticated using ((select att_private.is_staff()));
-create policy att_calendar_write on public.att_calendar for all to authenticated using ((select att_private.is_hr())) with check ((select att_private.is_hr()));
+create policy att_calendar_insert on public.att_calendar for insert to authenticated with check ((select att_private.is_hr()));
+create policy att_calendar_update on public.att_calendar for update to authenticated using ((select att_private.is_hr())) with check ((select att_private.is_hr()));
+create policy att_calendar_delete on public.att_calendar for delete to authenticated using ((select att_private.is_hr()));
 create policy att_settings_read on public.att_settings for select to authenticated using ((select att_private.is_staff()));
-create policy att_settings_write on public.att_settings for all to authenticated using ((select att_private.is_hr())) with check ((select att_private.is_hr()));
+create policy att_settings_insert on public.att_settings for insert to authenticated with check ((select att_private.is_hr()));
+create policy att_settings_update on public.att_settings for update to authenticated using ((select att_private.is_hr())) with check ((select att_private.is_hr()));
+create policy att_settings_delete on public.att_settings for delete to authenticated using ((select att_private.is_hr()));
 
 revoke all on public.att_staff, public.att_employees, public.att_events, public.att_calendar, public.att_settings from anon;
 
 alter publication supabase_realtime add table public.att_events, public.att_employees, public.att_calendar, public.att_settings;
+
+-- keep scan photos for 90 days only (records stay); runs daily 02:30 Thailand time
+create extension if not exists pg_cron;
+select cron.schedule('att-clear-old-snapshots', '30 19 * * *',
+  $$update public.att_events set snap = null where snap is not null and time < now() - interval '90 days'$$);
