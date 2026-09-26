@@ -712,12 +712,13 @@ function daySummary(emp, key) {
   const lastOutRaw = outs.length ? outs[outs.length - 1].time : null;
   const lastOut = lastOutRaw && firstIn && lastOutRaw > firstIn ? lastOutRaw : null;
   const present = !!firstIn;
-  // worked minutes = out - in, minus the lunch break when the stay spans it
+  // worked minutes = out - in, minus only the part of the lunch break that falls inside the stay
+  // (someone leaving at 12:10 loses 10 minutes, not the whole hour)
   let workedMin = null;
   if (firstIn && lastOut) {
     const raw = (lastOut - firstIn) / 60000;
-    const spansLunch = minOfDay(firstIn) < minutesOf(settings.lunchEnd) && minOfDay(lastOut) > minutesOf(settings.lunchStart);
-    workedMin = Math.max(0, Math.round(raw - (spansLunch ? lunchMinutes() : 0)));
+    const lunchOverlap = Math.max(0, Math.min(minOfDay(lastOut), minutesOf(settings.lunchEnd)) - Math.max(minOfDay(firstIn), minutesOf(settings.lunchStart)));
+    workedMin = Math.max(0, Math.round(raw - lunchOverlap));
   }
   const lunchMin = present && evs.some(e => e.type === 'lunch') ? lunchMinutes() : 0;
   let late = 0, early = 0, otMin = 0, regularMin = 0;
