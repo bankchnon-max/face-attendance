@@ -459,7 +459,7 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
           <label class="f"><span>ความเข้มงวดการจับคู่ใบหน้า: <b id="sThrLabel"></b></span>
             <div class="range-row"><span class="small muted">เข้มงวด</span><input type="range" id="sThr" min="0.35" max="0.65" step="0.01"><span class="small muted">ผ่อนปรน</span></div>
           </label>
-          <label class="check"><input type="checkbox" id="sLive"><span>ตรวจ Liveness (ต้องกระพริบตา) เพื่อกันการใช้รูปถ่าย</span></label>
+          <label class="check"><input type="checkbox" id="sLive"><span>ตรวจว่าเป็นคนจริง (หันหน้าเล็กน้อยหรือกระพริบตา) เพื่อกันการใช้รูปถ่าย</span></label>
           <label class="check"><input type="checkbox" id="sSound"><span>เสียงแจ้งเตือน</span></label>
           <label class="check"><input type="checkbox" id="sVoice"><span>เสียงพูดทักทาย</span></label>
           <div class="actions"><button class="btn primary" type="submit">บันทึกการตั้งค่า</button></div>
@@ -544,7 +544,7 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
   <div id="lvStep1">
     <h2 style="margin:0 0 10px;font-size:17px">ขอลา — ยืนยันตัวตน</h2>
     <div class="cam mini"><video id="lvVideo" playsinline muted></video></div>
-    <div class="status info" id="lvStatus" style="font-size:15px">มองกล้องแล้วกระพริบตาช้าๆ เพื่อยืนยันตัวตน</div>
+    <div class="status info" id="lvStatus" style="font-size:15px">มองกล้อง แล้วหันหน้าไปด้านข้างเล็กน้อยเพื่อยืนยันตัวตน</div>
     <div id="lvPickWrap" hidden>
       <label class="f" style="margin-top:10px"><span>ค้นหาชื่อ</span><input type="text" id="lvSearch" autocomplete="off"></label>
       <div class="pick" id="lvPickList"></div>
@@ -1004,13 +1004,31 @@ function eyeAspect(lm) {
   const ear = (a) => (d(a + 1, a + 5) + d(a + 2, a + 4)) / (2 * d(a, a + 3));
   return (ear(36) + ear(42)) / 2;
 }
-function updateBlink(b, ear) {
-  b.frames++;
-  if (!b.base) b.base = ear;
-  if (!b.closed) b.base = ear > b.base ? b.base * 0.5 + ear * 0.5 : b.base * 0.93 + ear * 0.07;
-  if (b.frames < 3) return;
-  if (!b.closed && ear < b.base * 0.74) b.closed = true;
-  else if (b.closed && ear > b.base * 0.88) b.done = true;
+// Liveness = the person either turns their head a little OR blinks.
+// Head turn is easy to catch even at a few frames per second, and a flat photo cannot do it:
+// tilting a photo squeezes the whole face evenly, so the nose stays centred between the cheeks.
+const newLive = () => ({ frames: 0, base: 0, closed: false, blink: false, startYaw: null, turned: false, done: false });
+function faceYaw(lm) {
+  const p = lm.positions, w = p[16].x - p[0].x;          // jaw edges
+  return w > 0 ? (p[30].x - p[0].x) / w : 0.5;           // nose tip position: 0.5 = looking straight
+}
+function updateLiveness(l, lm) {
+  l.frames++;
+  // head turn is measured from where the face started, so a camera mounted off to one side still works
+  const ear = eyeAspect(lm), signed = faceYaw(lm) - 0.5;
+  if (l.startYaw === null) l.startYaw = signed;
+  const moved = Math.abs(signed - l.startYaw);
+  if (moved > 0.12) l.turned = true;
+  // blink: only compare eye openness while the head stays near its starting position
+  if (moved < 0.06) {
+    if (!l.base) l.base = ear;
+    if (!l.closed) l.base = ear > l.base ? l.base * 0.6 + ear * 0.4 : l.base * 0.95 + ear * 0.05;
+    if (l.frames >= 3) {
+      if (!l.closed && ear < l.base * 0.8) l.closed = true;
+      else if (l.closed && ear > l.base * 0.9) l.blink = true;
+    }
+  }
+  l.done = l.turned || l.blink;
 }
 
 /* ---------- kiosk ---------- */
@@ -1028,38 +1046,49 @@ async function kioskLoop() {
   const video = $('#kVideo');
   try {
     if (video.readyState >= 2 && Date.now() > pauseUntil) {
-      const det = await detect(video);
+      // once someone is recognised, liveness frames skip the slow face-recognition step (3-4x more frames per second)
+      const fast = cand && settings.liveness && !cand.live.done && Date.now() - cand.lastMatch < 1500;
+      const det = fast ? await faceapi.detectSingleFace(video, detOpts).withFaceLandmarks() : await detect(video);
       if (kioskOn) handleKiosk(det, video);
     }
   } catch (e) { console.error(e); }
-  if (leaveIdentify) { $('#lvStatus').className = $('#kStatus').className; $('#lvStatus').textContent = $('#kStatus').textContent === 'มองกล้องเพื่อลงเวลา' ? 'มองกล้องแล้วกระพริบตาช้าๆ เพื่อยืนยันตัวตน' : $('#kStatus').textContent; }
-  if (kioskOn) setTimeout(kioskLoop, 60);
+  if (leaveIdentify) { $('#lvStatus').className = $('#kStatus').className; $('#lvStatus').textContent = $('#kStatus').textContent === 'มองกล้องเพื่อลงเวลา' ? 'มองกล้อง แล้วหันหน้าไปด้านข้างเล็กน้อยเพื่อยืนยันตัวตน' : $('#kStatus').textContent; }
+  if (kioskOn) setTimeout(kioskLoop, cand ? 15 : 60);   // run faster while someone is in front of the camera
 }
 function handleKiosk(det, video) {
-  const st = $('#kStatus'), canvas = $('#kCanvas');
-  if (!det) { cand = null; drawBox(canvas, video, null); setStatus(st, 'idle', 'มองกล้องเพื่อลงเวลา'); return; }
+  const st = $('#kStatus'), canvas = $('#kCanvas'), now = Date.now();
+  if (!det) {
+    if (cand && now - cand.lastSeen < 1500) return;   // a frame or two without a face: keep going
+    cand = null; drawBox(canvas, video, null); setStatus(st, 'idle', 'มองกล้องเพื่อลงเวลา'); return;
+  }
   if (det.detection.box.width < video.videoWidth * 0.16) { drawBox(canvas, video, det, '#e5a93b'); setStatus(st, 'warn', 'กรุณาเข้าใกล้กล้องอีกนิด'); cand = null; return; }
   if (!matcher) { drawBox(canvas, video, det, '#e5a93b'); setStatus(st, 'warn', 'ยังไม่มีพนักงานลงทะเบียน ไปที่เมนู "พนักงาน"'); return; }
-  const best = matcher.findBestMatch(det.descriptor);
-  if (best.label === 'unknown') {
+  let emp = null, dist = null;
+  if (det.descriptor) {
+    const best = matcher.findBestMatch(det.descriptor);
+    if (best.label !== 'unknown') { emp = empById(best.label); dist = best.distance; }
+  }
+  // while the head is turned the face may not match; keep the person we recognised a moment ago
+  if (!emp && cand && now - cand.lastMatch < 2500) emp = empById(cand.id);
+  if (!emp) {
     drawBox(canvas, video, det, '#f0796e');
     cand = null;
     setStatus(st, 'err', 'ไม่พบข้อมูลใบหน้านี้ในระบบ');
     return;
   }
-  const emp = empById(best.label);
-  if (!cand || cand.id !== emp.id) cand = { id: emp.id, since: Date.now(), hits: 0, blink: { base: 0, frames: 0, closed: false, done: false } };
-  cand.hits++;
-  updateBlink(cand.blink, eyeAspect(det.landmarks));
+  if (!cand || cand.id !== emp.id) cand = { id: emp.id, since: now, hits: 0, lastMatch: now, lastSeen: now, dist: dist ?? 1, live: newLive() };
+  cand.lastSeen = now;
+  if (dist != null) { cand.hits++; cand.lastMatch = now; cand.dist = Math.min(cand.dist, dist); }
+  updateLiveness(cand.live, det.landmarks);
   drawBox(canvas, video, det, '#2bb39f');
-  if (settings.liveness && !cand.blink.done) {
-    if (Date.now() - cand.since > 9000) { setStatus(st, 'warn', 'ไม่พบการกระพริบตา ลองขยับเข้าใกล้และกระพริบตาช้าๆ'); cand.since = Date.now(); cand.blink = { base: 0, frames: 0, closed: false, done: false }; return; }
-    setStatus(st, 'info', `คุณ${emp.name} — กรุณากระพริบตาช้าๆ เพื่อยืนยัน`);
+  if (settings.liveness && !cand.live.done) {
+    if (now - cand.since > 15000) { cand.since = now; cand.live = newLive(); }
+    setStatus(st, 'info', `คุณ${emp.name} — หันหน้าไปทางซ้ายหรือขวาเล็กน้อย (หรือกระพริบตา)`);
     return;
   }
   if (cand.hits < 2) { setStatus(st, 'info', 'กำลังยืนยันตัวตน…'); return; }
   if (leaveIdentify) { const cb = leaveIdentify; leaveIdentify = null; cand = null; cb(emp, snapshot(video, det.detection.box), 'ยืนยันด้วยใบหน้า'); return; }
-  const score = Math.round((1 - best.distance) * 100);
+  const score = Math.round((1 - cand.dist) * 100);
   const res = recordEvent(emp, { score, live: !!settings.liveness, source: 'face', snap: snapshot(video, det.detection.box) });
   cand = null;
   showResult(emp, res);
@@ -1545,7 +1574,7 @@ function validLeave(start, end, part) {
 function openLeaveDialog() {
   lvEmp = null; lvSnap = null;
   $('#lvStep1').hidden = false; $('#lvForm').hidden = true; $('#lvPickWrap').hidden = true; $('#lvPickOk').hidden = true; $('#lvPick').hidden = false;
-  $('#lvStatus').className = 'status info'; $('#lvStatus').textContent = 'มองกล้องแล้วกระพริบตาช้าๆ เพื่อยืนยันตัวตน';
+  $('#lvStatus').className = 'status info'; $('#lvStatus').textContent = 'มองกล้อง แล้วหันหน้าไปด้านข้างเล็กน้อยเพื่อยืนยันตัวตน';
   $('#leaveDlg').showModal();
   if (stream && kioskOn) {
     $('#lvVideo').srcObject = stream; $('#lvVideo').play().catch(() => {});
