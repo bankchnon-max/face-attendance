@@ -188,8 +188,8 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
 <div class="loading" id="loading">
   <div>
     <div class="spinner"></div>
-    <div style="font-weight:600;font-size:17px">กำลังโหลดโมเดล AI จดจำใบหน้า…</div>
-    <div class="muted small" id="loadingMsg">ครั้งแรกอาจใช้เวลาสักครู่</div>
+    <div style="font-weight:600;font-size:17px">กำลังเปิดระบบลงเวลา…</div>
+    <div class="muted small" id="loadingMsg"></div>
   </div>
 </div>
 
@@ -942,17 +942,32 @@ function renderLunchBanner() {
 $('#btnLunchMode').addEventListener('click', () => { lunchOutMode = !lunchOutMode; renderLunchBanner(); });
 
 /* ---------- face engine ---------- */
-let detOpts, matcher = null, stream = null;
-async function loadModels() {
+let matcher = null, stream = null;
+const detOpts = window.faceapi ? new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 }) : null;
+// The AI loads in the background while the user logs in and data loads; only scanning waits for it.
+// All three models download at once, then run once on a blank image: the first run compiles the GPU
+// programs (about 1 s on a PC, several seconds on a tablet), so without it the first person to scan would wait.
+let aiState = 'loading';
+const modelsReady = (async () => {
   if (!window.faceapi) throw new Error('โหลดไลบรารี face-api ไม่ได้ (ตรวจสอบอินเทอร์เน็ต)');
   await faceapi.tf.ready();
-  $('#loadingMsg').textContent = 'โหลดโมเดลตรวจจับใบหน้า…';
-  await faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL);
-  $('#loadingMsg').textContent = 'โหลดโมเดลจุดสำคัญบนใบหน้า…';
-  await faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL);
-  $('#loadingMsg').textContent = 'โหลดโมเดลจดจำใบหน้า…';
-  await faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL);
-  detOpts = new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 });
+  await Promise.all([
+    faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+    faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+    faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+  ]);
+  aiState = 'warming';
+  const blank = document.createElement('canvas'); blank.width = 160; blank.height = 160;
+  await faceapi.detectSingleFace(blank, detOpts);
+  await faceapi.nets.faceLandmark68Net.detectLandmarks(blank);
+  await faceapi.nets.faceRecognitionNet.computeFaceDescriptor(blank);
+  aiState = 'ready';
+})();
+modelsReady.catch(e => { aiState = 'error'; console.error(e); });
+async function waitForAI(statusEl) {
+  if (aiState !== 'ready' && statusEl) setStatus(statusEl, 'info', 'กำลังเตรียม AI จดจำใบหน้า… (เปิดครั้งแรกอาจใช้เวลาสักครู่)');
+  try { await modelsReady; return true; }
+  catch { if (statusEl) setStatus(statusEl, 'err', 'โหลด AI จดจำใบหน้าไม่สำเร็จ กรุณาตรวจสอบอินเทอร์เน็ตแล้วเปิดแอปใหม่'); return false; }
 }
 function buildMatcher() {
   const labeled = employees.filter(e => e.descriptors?.length)
@@ -1036,8 +1051,11 @@ let kioskOn = false, cand = null, pauseUntil = 0, resultTimer = null;
 async function startKiosk() {
   if (kioskOn) return;
   kioskOn = true;
-  const ok = await startCamera($('#kVideo'), $('#kPlaceholder'));
+  // open the camera while the AI finishes loading
+  const [ok, ai] = await Promise.all([startCamera($('#kVideo'), $('#kPlaceholder')), waitForAI($('#kStatus'))]);
   if (!ok) { kioskOn = false; setStatus($('#kStatus'), 'err', 'กล้องไม่พร้อมใช้งาน'); return; }
+  if (!ai || !kioskOn) { kioskOn = false; return; }
+  setStatus($('#kStatus'), 'idle', 'มองกล้องเพื่อลงเวลา');
   kioskLoop();
 }
 function stopKiosk() { kioskOn = false; cand = null; }
@@ -1164,7 +1182,8 @@ async function runEnroll() {
   $('#eCamWrap').style.display = 'block'; st.style.display = 'flex'; $('#eProgWrap').style.display = 'block';
   $('#btnCancelEnroll').style.display = 'inline-block'; $('#btnEnroll').disabled = true;
   $('#eProg').style.width = '0%';
-  if (!(await startCamera(video))) { stopEnroll(); return; }
+  const [camOk, aiOk] = await Promise.all([startCamera(video), waitForAI(st)]);
+  if (!camOk || !aiOk) { if (camOk) stopCamera(); $('#btnEnroll').disabled = false; $('#btnCancelEnroll').style.display = 'none'; return; }
   enrolling = true;
   const descs = []; let photo = null;
   while (enrolling && descs.length < POSES.length) {
@@ -1885,7 +1904,6 @@ $('#btnLogout').addEventListener('click', async () => {
 });
 (async () => {
   try {
-    await loadModels();
     const { data: { session } } = await sb.auth.getSession();
     if (session) await afterLogin(session.user); else showLogin();
   } catch (e) {
