@@ -169,6 +169,8 @@ body.role-kiosk #nav button:not([data-view="kiosk"]){display:none}
 dialog.wide{width:min(94vw,460px)}
 .cam.mini{aspect-ratio:4/3;margin-bottom:10px}
 textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);font:inherit;color:inherit;resize:vertical}
+.wage-in{width:110px;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);text-align:right}
+.wage-in.saved{border-color:var(--ok)}
 .pick{display:flex;flex-direction:column;gap:4px;max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px}
 .pick label{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:8px;cursor:pointer}
 .pick label:has(input:checked){background:var(--ok-bg)}
@@ -292,7 +294,7 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
         <h2>รายชื่อพนักงาน <span class="muted small" id="empCount"></span></h2>
         <div class="table-wrap">
           <table>
-            <thead><tr><th></th><th>ชื่อ</th><th>แผนก</th><th>ตัวอย่างใบหน้า</th><th></th></tr></thead>
+            <thead><tr><th></th><th>ชื่อ</th><th>แผนก</th><th>ตัวอย่างใบหน้า</th><th>ค่าแรง/วัน (บาท)</th><th></th></tr></thead>
             <tbody id="empBody"></tbody>
           </table>
         </div>
@@ -313,7 +315,7 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
       <div class="note" id="mInfo" style="margin:0 0 14px"></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>ชื่อ</th><th>แผนก</th><th>มาทำงาน</th><th>ลา (วัน)</th><th>สาย (ครั้ง / นาที)</th><th>ไม่สแกนออก</th><th>ชม.ทำงานปกติ</th><th>OT เที่ยง</th><th>OT เย็น</th><th>OT รวม</th></tr></thead>
+          <thead><tr><th>ชื่อ</th><th>แผนก</th><th>มาทำงาน</th><th>ลา (วัน)</th><th>สาย (ครั้ง / นาที)</th><th>ไม่สแกนออก</th><th>ชม.ทำงานปกติ</th><th>OT เที่ยง</th><th>OT เย็น</th><th>OT รวม</th><th>รายได้รวม (บาท)</th><th>สุทธิ (บาท)</th></tr></thead>
           <tbody id="mBody"></tbody>
         </table>
       </div>
@@ -482,6 +484,28 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
       </div>
     </div>
     <div class="card" style="margin-top:20px">
+      <h2>การคำนวณค่าแรง</h2>
+      <p class="muted small" style="margin-top:0">ใส่ค่าแรงรายวันของแต่ละคนที่เมนู <b>พนักงาน</b> · ค่าเริ่มต้นเป็นไปตามกฎหมายคุ้มครองแรงงาน ตรวจสอบกับฝ่ายบัญชีอีกครั้งก่อนจ่ายจริง</p>
+      <form id="payForm">
+        <div class="range-row" style="flex-wrap:wrap">
+          <label class="f" style="flex:1;min-width:150px"><span>ชั่วโมงทำงานต่อวัน (ใช้คิดค่าจ้างรายชั่วโมง)</span><input type="number" id="pHours" min="1" max="12" step="0.5"></label>
+          <label class="f" style="flex:1;min-width:150px"><span>OT วันทำงาน (เท่า)</span><input type="number" id="pOt" min="1" max="5" step="0.1"></label>
+          <label class="f" style="flex:1;min-width:150px"><span>ทำงานวันหยุด (เท่าของค่าแรงรายวัน)</span><input type="number" id="pHol" min="1" max="5" step="0.1"></label>
+          <label class="f" style="flex:1;min-width:150px"><span>OT วันหยุด (เท่า)</span><input type="number" id="pHolOt" min="1" max="5" step="0.1"></label>
+        </div>
+        <label class="check"><input type="checkbox" id="pPayLeave"><span>จ่ายค่าจ้างวันลาที่อนุมัติ (ลาป่วย ลากิจ ลาพักร้อน) · ลาอื่นๆ ไม่จ่าย</span></label>
+        <h3>ประกันสังคม (หักจากลูกจ้าง)</h3>
+        <label class="check"><input type="checkbox" id="pSso"><span>หักประกันสังคม</span></label>
+        <div class="range-row" style="flex-wrap:wrap">
+          <label class="f" style="flex:1;min-width:120px"><span>อัตรา (%)</span><input type="number" id="pSsoRate" min="0" max="20" step="0.1"></label>
+          <label class="f" style="flex:1;min-width:120px"><span>ฐานค่าจ้างต่ำสุด (บาท)</span><input type="number" id="pSsoMin" min="0" step="1"></label>
+          <label class="f" style="flex:1;min-width:120px"><span>ฐานค่าจ้างสูงสุด (บาท)</span><input type="number" id="pSsoMax" min="0" step="1"></label>
+        </div>
+        <p class="small muted" style="margin:0 0 12px">ปี 2569–2571: 5% ของค่าจ้าง ฐานไม่เกิน 17,500 บาท (หักสูงสุด 875 บาท/เดือน) · คิดจากค่าจ้างเวลาปกติ ไม่รวม OT</p>
+        <button class="btn primary" type="submit">บันทึกการคำนวณค่าแรง</button>
+      </form>
+    </div>
+    <div class="card" style="margin-top:20px">
       <h2>ผู้ใช้งานและรหัสผ่าน</h2>
       <p class="muted small" style="margin-top:0"><b>HR</b> เข้าได้ทุกเมนู · <b>เครื่องสแกนอย่างเดียว</b> เห็นแค่หน้าสแกน ใช้กับแท็บเล็ตหน้างาน ดูรายงานหรือแก้ตั้งค่าไม่ได้</p>
       <div class="table-wrap">
@@ -520,6 +544,7 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
     <div class="muted small" style="margin-bottom:12px" id="dayDefault"></div>
     <label class="f"><span>กำหนดวันนี้เป็น</span>
       <select id="dayType"><option value="">ตามค่าประจำสัปดาห์</option><option value="work">วันทำงาน</option><option value="off">วันหยุดโรงงาน (นักขัตฤกษ์ / หยุดบริษัท)</option></select></label>
+    <label class="check" id="dayPaidWrap"><input type="checkbox" id="dayPaid"><span>วันหยุดนักขัตฤกษ์ / วันหยุดตามประเพณี — <b>จ่ายค่าจ้าง</b>ให้พนักงานรายวัน</span></label>
     <label class="f"><span>หมายเหตุ</span><input type="text" id="dayNote" placeholder="เช่น ออเดอร์ลูกค้า A, วันแม่แห่งชาติ" autocomplete="off"></label>
     <div class="actions" style="justify-content:flex-end">
       <button class="btn" value="cancel" formnovalidate>ยกเลิก</button>
@@ -601,11 +626,13 @@ const store = {
 };
 const DEFAULTS = {
   shiftStart: '08:30', shiftEnd: '17:30', grace: 5, cooldown: 60, threshold: 0.5, liveness: true, sound: true, voice: true,
-  workDays: [1, 2, 3, 4, 5, 6], leaveQuota: { sick: 30, personal: 3, vacation: 6 }, lunchStart: '12:00', lunchEnd: '13:00', lunchScan: true, otAfter: 30, otRound: 30, halfDayHours: 5
+  workDays: [1, 2, 3, 4, 5, 6], leaveQuota: { sick: 30, personal: 3, vacation: 6 }, lunchStart: '12:00', lunchEnd: '13:00', lunchScan: true, otAfter: 30, otRound: 30, halfDayHours: 5,
+  payroll: { hoursPerDay: 8, otMult: 1.5, holidayMult: 2, holidayOtMult: 3, payLeave: true, sso: true, ssoRate: 5, ssoMinBase: 1650, ssoMaxBase: 17500 }
 };
 let employees = [];
 let events = [];      // only the months that have been loaded (see ensureMonth)
 let settings = { ...DEFAULTS };
+let wages = {};       // emp_id -> daily wage (HR only)
 let leaves = [];      // leave requests (HR only; the kiosk can file but not read them)
 let calendar = {};    // { 'YYYY-MM-DD': { type: 'work'|'off', note } } overrides the weekly pattern
 let currentUser = null;
@@ -665,17 +692,20 @@ function needData(months, snapDay, rerender) {
   if (waits.length) Promise.all(waits).then(rs => { if (rs.some(Boolean)) rerender(); });
 }
 async function loadAll() {
-  const [emps, cal, set, lv] = await Promise.all([
+  const [emps, cal, set, lv, wg] = await Promise.all([
     fetchAll(() => sb.from('att_employees').select('*').order('name')),
     fetchAll(() => sb.from('att_calendar').select('*')),
     sb.from('att_settings').select('data').eq('id', 1).maybeSingle(),
-    currentRole === 'hr' ? fetchAll(() => sb.from('att_leaves').select('*').order('start_date')) : Promise.resolve([])
+    currentRole === 'hr' ? fetchAll(() => sb.from('att_leaves').select('*').order('start_date')) : Promise.resolve([]),
+    currentRole === 'hr' ? fetchAll(() => sb.from('att_wages').select('emp_id, daily_wage')) : Promise.resolve([])
   ]);
   if (set.error) throw set.error;
   employees = emps.map(empFromRow);
-  calendar = Object.fromEntries(cal.map(r => [r.day, { type: r.type, note: r.note || '' }]));
+  calendar = Object.fromEntries(cal.map(r => [r.day, { type: r.type, note: r.note || '', paid: !!r.paid }]));
+  wages = Object.fromEntries(wg.map(r => [r.emp_id, Number(r.daily_wage)]));
   leaves = lv.map(leaveFromRow);
   settings = { ...DEFAULTS, ...(set.data?.data || {}) };
+  settings.payroll = { ...DEFAULTS.payroll, ...(set.data?.data?.payroll || {}) };
   const today = dayKey(Date.now());
   await Promise.all([ensureMonth(today.slice(0, 7)), ensureSnaps(today)]);
 }
@@ -692,7 +722,7 @@ const deleteEmployee = id => dbCall(sb.from('att_employees').delete().eq('id', i
 const saveSettings = () => dbCall(sb.from('att_settings').upsert({ id: 1, data: settings, updated_at: new Date().toISOString() }));
 function saveCalendarDay(key) {
   const o = calendar[key];
-  return dbCall(o ? sb.from('att_calendar').upsert({ day: key, type: o.type, note: o.note || null }) : sb.from('att_calendar').delete().eq('day', key));
+  return dbCall(o ? sb.from('att_calendar').upsert({ day: key, type: o.type, note: o.note || null, paid: o.type === 'off' && !!o.paid }) : sb.from('att_calendar').delete().eq('day', key));
 }
 async function deleteEvent(id) {
   outbox = outbox.filter(r => r.id !== id); store.set('outbox', outbox);
@@ -750,7 +780,7 @@ function subscribeRealtime() {
       buildMatcher(); refreshView();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'att_calendar' }, p => {
-      if (p.eventType === 'DELETE') delete calendar[p.old.day]; else calendar[p.new.day] = { type: p.new.type, note: p.new.note || '' };
+      if (p.eventType === 'DELETE') delete calendar[p.old.day]; else calendar[p.new.day] = { type: p.new.type, note: p.new.note || '', paid: !!p.new.paid };
       refreshView();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'att_leaves' }, p => {
@@ -758,8 +788,12 @@ function subscribeRealtime() {
         : [...leaves.filter(l => l.id !== p.new.id), leaveFromRow(p.new)];
       refreshView();
     })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'att_wages' }, p => {
+      if (p.eventType === 'DELETE') delete wages[p.old.emp_id]; else wages[p.new.emp_id] = Number(p.new.daily_wage);
+      refreshView();
+    })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'att_settings' }, p => {
-      if (p.new?.data) { settings = { ...DEFAULTS, ...p.new.data }; buildMatcher(); refreshView(); }
+      if (p.new?.data) { settings = { ...DEFAULTS, ...p.new.data, payroll: { ...DEFAULTS.payroll, ...(p.new.data.payroll || {}) } }; buildMatcher(); refreshView(); }
     })
     .subscribe();
 }
@@ -807,7 +841,7 @@ function dayInfo(key) {
   const weekly = settings.workDays.includes(new Date(key + 'T00:00:00').getDay());
   const o = calendar[key];
   const type = o ? (o.type === 'off' ? 'off' : 'work') : weekly ? 'work' : 'off';
-  return { type, work: type === 'work', note: o?.note || '', special: !!o, weekly };
+  return { type, work: type === 'work', note: o?.note || '', special: !!o, weekly, paid: type === 'off' && !!o?.paid };
 }
 function scheduledMin() { return Math.max(0, minutesOf(settings.shiftEnd) - minutesOf(settings.shiftStart) - lunchMinutes()); }
 function inLunchWindow(t = Date.now()) { const m = minOfDay(t); return m >= minutesOf(settings.lunchStart) && m < minutesOf(settings.lunchEnd); }
@@ -877,6 +911,42 @@ function leaveDays(l, from = '0000', to = '9999') {
   for (let k = l.start > from ? l.start : from; k <= l.end && k <= to; k = addDays(k, 1)) if (dayInfo(k).work) n += l.part === 'full' ? 1 : 0.5;
   return n;
 }
+// Pay for one employee and month (days up to today), daily-wage workers, Thai labour-law defaults:
+//  work day        : days worked (half = 0.5) x daily wage
+//  factory holiday : days worked x wage x holidayMult (2x); a paid public holiday not worked = 1x wage
+//  OT              : hours x (wage / hoursPerDay) x 1.5 on work days, x 3 on holidays (lunch + evening OT)
+//  approved leave  : sick / personal / vacation days x wage (if payLeave)
+//  social security : rate% of normal-time pay (no OT), base clamped to [min, max]
+const baht = n => Math.round(n * 100) / 100;
+function payrollFor(emp, month) {
+  const p = { ...DEFAULTS.payroll, ...(settings.payroll || {}) };
+  const wage = Number(wages[emp.id] || 0), hourly = wage / (Number(p.hoursPerDay) || 8);
+  const [y, m] = month.split('-').map(Number), days = new Date(y, m, 0).getDate(), today = dayKey(Date.now());
+  const hired = emp.createdAt ? dayKey(emp.createdAt) : '0000';
+  const r = { wage, workDays: 0, offDays: 0, otWorkMin: 0, otOffMin: 0, leaveDays: 0, paidHolidays: 0 };
+  for (let d = 1; d <= days; d++) {
+    const key = `${month}-${pad(d)}`;
+    if (key > today) break;
+    const s = daySummary(emp, key);
+    if (s.present) {
+      if (s.info.work) { r.workDays += s.dayValue; r.otWorkMin += s.otMin + s.lunchMin; }
+      else { r.offDays += s.dayValue; r.otOffMin += s.otMin + s.lunchMin; }
+    } else if (s.info.paid && key >= hired) r.paidHolidays += 1;
+    if (s.leave && p.payLeave && s.leave.type !== 'other') r.leaveDays += s.leaveValue;
+  }
+  r.regularPay = baht(r.workDays * wage);
+  r.holidayPay = baht(r.offDays * wage * p.holidayMult);
+  r.otPay = baht(r.otWorkMin / 60 * hourly * p.otMult);
+  r.otHolidayPay = baht(r.otOffMin / 60 * hourly * p.holidayOtMult);
+  r.leavePay = baht(r.leaveDays * wage);
+  r.paidHolidayPay = baht(r.paidHolidays * wage);
+  r.gross = baht(r.regularPay + r.holidayPay + r.otPay + r.otHolidayPay + r.leavePay + r.paidHolidayPay);
+  const ssoBase = Math.min(Number(p.ssoMaxBase), Math.max(Number(p.ssoMinBase), r.regularPay + r.holidayPay + r.leavePay + r.paidHolidayPay));
+  r.sso = p.sso && wage > 0 ? Math.round(ssoBase * Number(p.ssoRate) / 100) : 0;
+  r.net = baht(r.gross - r.sso);
+  return r;
+}
+const fmtBaht = n => n ? n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-';
 const fmtDays = n => Number.isInteger(n) ? String(n) : n.toFixed(1);
 // Monthly totals per employee: days actually worked (half days count 0.5) + OT
 function monthSummary(emp, month) {
@@ -1367,9 +1437,18 @@ function renderEmployees() {
       <td>${e.photo ? `<img class="avatar" src="${esc(e.photo)}" alt="">` : '<div class="avatar"></div>'}</td>
       <td>${esc(e.name)}</td><td>${esc(e.dept || '-')}</td>
       <td>${e.descriptors?.length ? `<span class="badge b-ok">${e.descriptors.length} มุม</span>` : '<span class="badge b-err">ไม่มี</span>'}</td>
+      <td><input class="wage-in" type="number" min="0" step="1" inputmode="decimal" data-wage="${e.id}" value="${wages[e.id] ?? ''}" placeholder="0"></td>
       <td><button class="btn sm" data-reenroll="${e.id}">ถ่ายใหม่</button> <button class="btn sm danger" data-del="${e.id}">ลบ</button></td>
     </tr>`).join('') : '<tr><td colspan="6" class="empty">ยังไม่มีพนักงาน เริ่มลงทะเบียนจากฟอร์มด้านซ้าย</td></tr>';
 }
+$('#empBody').addEventListener('change', async ev => {
+  const inp = ev.target.closest('[data-wage]'); if (!inp) return;
+  const v = Math.max(0, Math.round(Number(inp.value || 0) * 100) / 100);
+  inp.classList.remove('saved');
+  if (await dbCall(sb.from('att_wages').upsert({ emp_id: inp.dataset.wage, daily_wage: v, updated_at: new Date().toISOString() }))) {
+    wages[inp.dataset.wage] = v; inp.classList.add('saved');
+  }
+});
 $('#empBody').addEventListener('click', async ev => {
   const re = ev.target.closest('[data-reenroll]'), del = ev.target.closest('[data-del]');
   if (re) {
@@ -1443,7 +1522,7 @@ function renderMonthSummary() {
     + `ครึ่งวัน (0.5 วัน) = เข้างานตั้งแต่ ${esc(settings.lunchStart)} หรือทำงานไม่ถึง ${esc(settings.halfDayHours)} ชม.<br>`
     + `OT เที่ยง = ${fmtMin(lunchMinutes())}/ครั้ง (${esc(settings.lunchStart)}–${esc(settings.lunchEnd)}) · OT เย็นเริ่มหลังเลิกงาน ${esc(settings.otAfter)} นาที ปัดลงทีละ ${esc(settings.otRound)} นาที`;
   $('#mBody').innerHTML = employees.length ? employees.map(e => {
-    const r = monthSummary(e, m);
+    const r = monthSummary(e, m), pay = payrollFor(e, m);
     return `<tr><td>${esc(e.name)}</td><td>${esc(e.dept || '-')}</td>
       <td class="num"><b>${fmtDays(r.workedDays)}</b> วัน${r.halfDays || r.offDayWorked ? ` <span class="small muted">(${[r.halfDays ? `ครึ่งวัน ${r.halfDays}` : '', r.offDayWorked ? `วันหยุด ${r.offDayWorked}` : ''].filter(Boolean).join(', ')})</span>` : ''}</td>
       <td class="num">${leaveCell(r)}</td>
@@ -1452,8 +1531,10 @@ function renderMonthSummary() {
       <td class="num">${fmtMin(r.regularMin)}</td>
       <td class="num">${r.lunchMin ? `${fmtMin(r.lunchMin)} <span class="small muted">(${r.lunchDays} ครั้ง)</span>` : '-'}</td>
       <td class="num">${r.otMin ? fmtMin(r.otMin) : '-'}</td>
-      <td class="num"><b>${r.lunchMin + r.otMin ? fmtMin(r.lunchMin + r.otMin) : '-'}</b></td></tr>`;
-  }).join('') : '<tr><td colspan="11" class="empty">ยังไม่มีพนักงาน</td></tr>';
+      <td class="num"><b>${r.lunchMin + r.otMin ? fmtMin(r.lunchMin + r.otMin) : '-'}</b></td>
+      <td class="num">${pay.wage ? fmtBaht(pay.gross) : '<span class="small muted">ยังไม่ใส่ค่าแรง</span>'}</td>
+      <td class="num"><b>${pay.wage ? fmtBaht(pay.net) : '-'}</b></td></tr>`;
+  }).join('') : '<tr><td colspan="13" class="empty">ยังไม่มีพนักงาน</td></tr>';
 }
 $('#rLog').addEventListener('click', async ev => {
   const b = ev.target.closest('[data-delev]'); if (!b) return;
@@ -1502,10 +1583,10 @@ $('#btnExportMonth').addEventListener('click', async () => {
 $('#btnExportSummary').addEventListener('click', async () => {
   const m = $('#rMonth').value; if (!m) return;
   await ensureMonth(m);
-  const rows = [['เดือน', 'ชื่อ', 'แผนก', 'มาทำงาน (วัน)', 'ครึ่งวัน (ครั้ง)', 'มาวันหยุดโรงงาน (วัน)', 'สาย (ครั้ง)', 'สายรวม (นาที)', 'ไม่สแกนออก (ครั้ง)', 'ชม.ทำงานปกติ', 'OT เที่ยง (ครั้ง)', 'OT เที่ยง (ชม.)', 'OT เย็น (ชม.)', 'OT รวม (ชม.)', 'ลาป่วย (วัน)', 'ลากิจ (วัน)', 'ลาพักร้อน (วัน)', 'ลาอื่นๆ (วัน)']];
+  const rows = [['เดือน', 'ชื่อ', 'แผนก', 'มาทำงาน (วัน)', 'ครึ่งวัน (ครั้ง)', 'มาวันหยุดโรงงาน (วัน)', 'สาย (ครั้ง)', 'สายรวม (นาที)', 'ไม่สแกนออก (ครั้ง)', 'ชม.ทำงานปกติ', 'OT เที่ยง (ครั้ง)', 'OT เที่ยง (ชม.)', 'OT เย็น (ชม.)', 'OT รวม (ชม.)', 'ลาป่วย (วัน)', 'ลากิจ (วัน)', 'ลาพักร้อน (วัน)', 'ลาอื่นๆ (วัน)', 'ค่าแรง/วัน', 'รายได้รวม', 'ประกันสังคม', 'สุทธิ']];
   employees.forEach(e => {
     const r = monthSummary(e, m);
-    rows.push([m, e.name, e.dept, r.workedDays, r.halfDays, r.offDayWorked, r.lateCount, r.lateMin, r.missingOut, toH(r.regularMin), r.lunchDays, toH(r.lunchMin), toH(r.otMin), toH(r.lunchMin + r.otMin), r.leave.sick, r.leave.personal, r.leave.vacation, r.leave.other]);
+    rows.push([m, e.name, e.dept, r.workedDays, r.halfDays, r.offDayWorked, r.lateCount, r.lateMin, r.missingOut, toH(r.regularMin), r.lunchDays, toH(r.lunchMin), toH(r.otMin), toH(r.lunchMin + r.otMin), r.leave.sick, r.leave.personal, r.leave.vacation, r.leave.other, ...(p => [p.wage, p.gross, p.sso, p.net])(payrollFor(e, m))]);
   });
   downloadFile(`attendance-summary-${m}.csv`, toCsv(rows), 'text/csv');
 });
@@ -1548,6 +1629,34 @@ async function exportPayrollExcel(m) {
   const rules = `เข้างาน ${settings.shiftStart} เลิก ${settings.shiftEnd} · ครึ่งวัน = เข้าตั้งแต่ ${settings.lunchStart} หรือทำไม่ถึง ${settings.halfDayHours} ชม. · OT เที่ยง ${fmtMin(lunchMinutes())}/ครั้ง · OT เย็นเริ่มหลังเลิกงาน ${settings.otAfter} นาที ปัดลงทีละ ${settings.otRound} นาที`;
   const wb = new ExcelJS.Workbook();
   wb.creator = 'ระบบลงเวลาใบหน้า'; wb.created = new Date();
+
+  /* sheet 0: pay, one row per employee, with a signature column */
+  const pp = { ...DEFAULTS.payroll, ...(settings.payroll || {}) };
+  const payCols = ['ลำดับ', 'ชื่อ-นามสกุล', 'แผนก', 'ค่าแรง/วัน', 'วันทำงาน (วัน)', 'ค่าแรงปกติ', 'ทำงานวันหยุด (วัน)', `ค่าทำงานวันหยุด (${pp.holidayMult}x)`, 'OT วันทำงาน (ชม.)', `ค่า OT (${pp.otMult}x)`, 'OT วันหยุด (ชม.)', `ค่า OT วันหยุด (${pp.holidayOtMult}x)`, 'วันลาได้ค่าจ้าง', 'ค่าจ้างวันลา', 'วันหยุดนักขัตฤกษ์', 'ค่าจ้างวันหยุดนักขัตฤกษ์', 'รายได้รวม', 'หักประกันสังคม', 'รับสุทธิ', 'ลายมือชื่อผู้รับเงิน'];
+  const wp = wb.addWorksheet('ค่าแรง', { views: [{ state: 'frozen', xSplit: 2, ySplit: 3 }], pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 } });
+  xlTitle(wp, `ใบสรุปค่าแรง — ${label} (${upTo})`, `ค่าจ้างรายชั่วโมง = ค่าแรง/วัน ÷ ${pp.hoursPerDay} ชม. · ประกันสังคม ${pp.sso ? `${pp.ssoRate}% ฐาน ${Number(pp.ssoMinBase).toLocaleString()}–${Number(pp.ssoMaxBase).toLocaleString()} บาท ไม่รวม OT` : 'ไม่หัก'} · ${pp.payLeave ? 'จ่ายค่าจ้างวันลาป่วย/กิจ/พักร้อนที่อนุมัติ' : 'ไม่จ่ายค่าจ้างวันลา'}`, payCols.length);
+  xlHeader(wp, 3, payCols);
+  wp.columns = [6, 24, 12, 10, 10, 12, 10, 13, 10, 11, 10, 12, 10, 11, 10, 12, 13, 12, 13, 20].map(width => ({ width }));
+  const money = new Set([4, 6, 8, 10, 12, 14, 16, 17, 18, 19]);
+  employees.forEach((e, i) => {
+    const p = payrollFor(e, m);
+    const row = wp.addRow([i + 1, e.name, e.dept || '', p.wage, p.workDays, p.regularPay, p.offDays, p.holidayPay, xlHours(p.otWorkMin), p.otPay, xlHours(p.otOffMin), p.otHolidayPay, p.leaveDays, p.leavePay, p.paidHolidays, p.paidHolidayPay, p.gross, p.sso, p.net, '']);
+    row.height = 24;
+    row.eachCell({ includeEmpty: true }, (c, n) => {
+      c.border = XL.border; c.alignment = { vertical: 'middle', horizontal: n >= 4 && n <= 19 ? 'right' : 'left' };
+      if (money.has(n)) c.numFmt = '#,##0.00;-#,##0.00;"-"';
+      else if (n >= 5 && n <= 15) c.numFmt = '0.0#;-0.0#;"-"';
+    });
+    row.getCell(19).font = { bold: true };
+    if (!p.wage) { row.getCell(4).fill = XL.miss; row.getCell(4).value = 'ยังไม่ใส่'; }
+  });
+  if (employees.length) {
+    const last = 3 + employees.length, colL = n => String.fromCharCode(64 + n);
+    const tr = wp.addRow(['', 'รวม', '', ...payCols.slice(3, 19).map((_, i) => [4].includes(i + 4) ? '' : { formula: `SUM(${colL(i + 4)}4:${colL(i + 4)}${last})` }), '']);
+    tr.eachCell({ includeEmpty: true }, (c, n) => { c.font = { bold: true }; c.fill = XL.total; c.border = XL.border; if (money.has(n)) c.numFmt = '#,##0.00'; else if (n >= 5 && n <= 15) c.numFmt = '0.0#;-0.0#;"-"'; });
+  }
+  wp.addRow([]);
+  wp.addRow(['', 'ตรวจสอบกับฝ่ายบัญชีก่อนจ่ายจริง · ค่าแรงคิดตามเวลาสแกน วันลาที่อนุมัติ และปฏิทินวันหยุดในระบบ']).getCell(2).font = { size: 10, color: { argb: 'FF5C6773' } };
 
   /* sheet 1: payroll summary, one row per employee, totals at the bottom */
   const cols = ['ลำดับ', 'ชื่อ-นามสกุล', 'แผนก', 'มาทำงาน (วัน)', 'ครึ่งวัน (ครั้ง)', 'มาวันหยุดโรงงาน (วัน)', 'สาย (ครั้ง)', 'สายรวม (นาที)', 'ไม่สแกนออก (ครั้ง)', 'ชม.ทำงานปกติ', 'OT เที่ยง (ครั้ง)', 'OT เที่ยง (ชม.)', 'OT เย็น (ชม.)', 'OT รวม (ชม.)', 'ลาป่วย (วัน)', 'ลากิจ (วัน)', 'ลาพักร้อน (วัน)', 'ลาอื่นๆ (วัน)', 'หมายเหตุ'];
@@ -1652,7 +1761,7 @@ function renderCalendar() {
   for (let d = 1; d <= days; d++) {
     const key = `${calMonth}-${pad(d)}`, info = dayInfo(key), n = counts[key]?.size || 0;
     html += `<button type="button" class="cal-day ${info.type}${info.special ? ' special' : ''}${key === today ? ' today' : ''}" data-day="${key}">
-      <span class="d">${d}</span>${n ? `<span class="cnt">มา ${n} คน</span>` : ''}<span class="n">${info.note ? esc(info.note) : info.work ? 'ทำงาน' : 'หยุด'}</span></button>`;
+      <span class="d">${d}</span>${n ? `<span class="cnt">มา ${n} คน</span>` : ''}<span class="n">${info.paid ? '💰 ' : ''}${info.note ? esc(info.note) : info.work ? 'ทำงาน' : 'หยุด'}</span></button>`;
   }
   $('#calGrid').innerHTML = html;
   const ci = monthCalendarInfo(calMonth);
@@ -1692,19 +1801,42 @@ $('#calGrid').addEventListener('click', e => {
   $('#dayDefault').textContent = `ค่าประจำสัปดาห์: ${info.weekly ? 'วันทำงาน' : 'วันหยุดโรงงาน'}`;
   $('#dayType').value = calendar[key] ? info.type : '';
   $('#dayNote').value = calendar[key]?.note || '';
+  $('#dayPaid').checked = !!calendar[key]?.paid;
+  syncDayPaid();
   $('#dayDlg').showModal();
 });
+function syncDayPaid() {
+  const t = $('#dayType').value || (calEditKey ? dayInfo(calEditKey).type : 'work');
+  $('#dayPaidWrap').style.display = t === 'off' ? '' : 'none';
+}
+$('#dayType').addEventListener('change', syncDayPaid);
 $('#dayDlg').addEventListener('close', () => {
   if ($('#dayDlg').returnValue !== 'ok' || !calEditKey) return;
   const type = $('#dayType').value, note = $('#dayNote').value.trim();
-  if (type || note) calendar[calEditKey] = { type: type || dayInfo(calEditKey).type, note };
+  const finalType = type || dayInfo(calEditKey).type, paid = finalType === 'off' && $('#dayPaid').checked;
+  if (type || note || paid) calendar[calEditKey] = { type: finalType, note, paid };
   else delete calendar[calEditKey];
   saveCalendarDay(calEditKey); renderCalendar(); tick();
 });
 
 
 /* ---------- settings ---------- */
+function renderPayForm() {
+  const p = { ...DEFAULTS.payroll, ...(settings.payroll || {}) };
+  $('#pHours').value = p.hoursPerDay; $('#pOt').value = p.otMult; $('#pHol').value = p.holidayMult; $('#pHolOt').value = p.holidayOtMult;
+  $('#pPayLeave').checked = !!p.payLeave; $('#pSso').checked = !!p.sso;
+  $('#pSsoRate').value = p.ssoRate; $('#pSsoMin').value = p.ssoMinBase; $('#pSsoMax').value = p.ssoMaxBase;
+}
+$('#payForm').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  const num = (id, d) => { const v = Number($(id).value); return Number.isFinite(v) && v >= 0 ? v : d; };
+  const D = DEFAULTS.payroll;
+  settings.payroll = { hoursPerDay: num('#pHours', D.hoursPerDay) || D.hoursPerDay, otMult: num('#pOt', D.otMult), holidayMult: num('#pHol', D.holidayMult), holidayOtMult: num('#pHolOt', D.holidayOtMult),
+    payLeave: $('#pPayLeave').checked, sso: $('#pSso').checked, ssoRate: num('#pSsoRate', D.ssoRate), ssoMinBase: num('#pSsoMin', D.ssoMinBase), ssoMaxBase: num('#pSsoMax', D.ssoMaxBase) };
+  if (await saveSettings()) toast('บันทึกการคำนวณค่าแรงแล้ว', 'ok');
+});
 function renderSettings() {
+  renderPayForm();
   $('#sStart').value = settings.shiftStart; $('#sEnd').value = settings.shiftEnd;
   $('#sGrace').value = settings.grace; $('#sCooldown').value = settings.cooldown;
   $('#sThr').value = settings.threshold; $('#sThrLabel').textContent = Number(settings.threshold).toFixed(2);
@@ -1734,7 +1866,7 @@ $('#btnBackup').addEventListener('click', async () => {
       fetchAll(() => sb.from('att_events').select('id,emp_id,time,type,score,live,source').order('time'))
     ]);
     const leavesBackup = lvs;
-    downloadFile(`face-attendance-backup-${dayKey(Date.now())}.json`, JSON.stringify({ version: 3, exportedAt: new Date().toISOString(), employees: emps.map(empFromRow), events: evs.map(evFromRow), leaves: leavesBackup, settings, calendar }), 'application/json');
+    downloadFile(`face-attendance-backup-${dayKey(Date.now())}.json`, JSON.stringify({ version: 3, exportedAt: new Date().toISOString(), employees: emps.map(empFromRow), events: evs.map(evFromRow), leaves: leavesBackup, wages, settings, calendar }), 'application/json');
   } catch (e) { toast('สำรองข้อมูลไม่สำเร็จ: ' + e.message, 'err'); }
 });
 async function reloadData() {
@@ -1752,7 +1884,8 @@ $('#fileImport').addEventListener('change', async ev => {
     await up('att_employees', data.employees.map(empToRow));
     await up('att_events', data.events.map(e => evToRow({ ...e, snap: null })));
     if (Array.isArray(data.leaves)) await up('att_leaves', data.leaves);
-    await up('att_calendar', Object.entries(data.calendar || {}).map(([day, o]) => ({ day, type: o.type === 'off' ? 'off' : 'work', note: o.note || null })));
+    if (data.wages) await up('att_wages', Object.entries(data.wages).map(([emp_id, daily_wage]) => ({ emp_id, daily_wage })));
+    await up('att_calendar', Object.entries(data.calendar || {}).map(([day, o]) => ({ day, type: o.type === 'off' ? 'off' : 'work', note: o.note || null, paid: o.type === 'off' && !!o.paid })));
     if (data.settings) { settings = { ...DEFAULTS, ...data.settings }; await saveSettings(); }
     await reloadData();
     toast('นำเข้าข้อมูลสำเร็จ', 'ok');

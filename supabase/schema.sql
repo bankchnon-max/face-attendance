@@ -1,5 +1,5 @@
 -- Face attendance app schema (applied to Supabase as migrations
--- att_face_attendance_schema + att_move_is_staff_to_private_schema + att_drop_employee_code + att_roles_hr_and_kiosk + att_split_write_policies_and_snap_retention + att_leaves).
+-- att_face_attendance_schema + att_move_is_staff_to_private_schema + att_drop_employee_code + att_roles_hr_and_kiosk + att_split_write_policies_and_snap_retention + att_leaves + att_wages_and_paid_holidays).
 -- Roles: hr = everything; kiosk = read what scanning needs + add scans only.
 -- Only users listed in att_staff can read or write anything.
 
@@ -150,3 +150,21 @@ create policy att_leaves_insert on public.att_leaves for insert to authenticated
 create policy att_leaves_update on public.att_leaves for update to authenticated using ((select att_private.is_hr())) with check ((select att_private.is_hr()));
 create policy att_leaves_delete on public.att_leaves for delete to authenticated using ((select att_private.is_hr()));
 alter publication supabase_realtime add table public.att_leaves;
+
+-- Daily wage per employee: HR only (the kiosk reads att_employees for face matching, so pay lives separately)
+create table public.att_wages (
+  emp_id text primary key,
+  daily_wage numeric(10,2) not null default 0 check (daily_wage >= 0 and daily_wage < 100000),
+  updated_at timestamptz not null default now(),
+  updated_by uuid default auth.uid()
+);
+alter table public.att_wages enable row level security;
+revoke all on public.att_wages from anon;
+create policy att_wages_read on public.att_wages for select to authenticated using ((select att_private.is_hr()));
+create policy att_wages_insert on public.att_wages for insert to authenticated with check ((select att_private.is_hr()));
+create policy att_wages_update on public.att_wages for update to authenticated using ((select att_private.is_hr())) with check ((select att_private.is_hr()));
+create policy att_wages_delete on public.att_wages for delete to authenticated using ((select att_private.is_hr()));
+alter publication supabase_realtime add table public.att_wages;
+
+-- a factory holiday can be a paid public holiday
+alter table public.att_calendar add column paid boolean not null default false;
