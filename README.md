@@ -18,6 +18,7 @@
 | ไฟล์ | หน้าที่ |
 |---|---|
 | `index.html` | ตัวแอปทั้งหมด (HTML + CSS + JS) |
+| `ai-worker.js` | AI จดจำใบหน้า ทำงานเบื้องหลัง (Web Worker) ให้หน้าจอกดได้ตลอด |
 | `manifest.webmanifest`, `sw.js`, `icons/` | ทำให้ติดตั้งเป็นแอปได้ (PWA) และเปิดได้แม้เน็ตไม่ดี |
 | `tools/make-icons.ps1` | สร้างไอคอนแอปใหม่ |
 | `serve.js` | เซิร์ฟเวอร์สำหรับทดสอบในเครื่อง: `node serve.js` แล้วเปิด http://localhost:5173 |

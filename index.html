@@ -944,12 +944,50 @@ $('#btnLunchMode').addEventListener('click', () => { lunchOutMode = !lunchOutMod
 /* ---------- face engine ---------- */
 let matcher = null, stream = null;
 const detOpts = window.faceapi ? new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 }) : null;
-// The AI loads in the background while the user logs in and data loads; only scanning waits for it.
-// All three models download at once, then run once on a blank image: the first run compiles the GPU
-// programs (about 1 s on a PC, several seconds on a tablet), so without it the first person to scan would wait.
-let aiState = 'loading';
+// The face AI runs in a background worker (ai-worker.js) so the screen always responds to taps:
+// on a tablet each frame takes 0.3-0.6 s of GPU work, which on the page itself blocked every tap.
+// If the device cannot run it in a worker, it falls back to running on the page as before.
+// Either way it loads in the background while the user logs in, and runs once on a blank image
+// so the GPU programs are compiled before the first person scans.
+let aiState = 'loading', aiWorker = null, aiReq = 0, workerTensors = 0;
+const aiPending = new Map();
+function startWorkerAI() {
+  return new Promise((resolve, reject) => {
+    if (!window.Worker || !('OffscreenCanvas' in window) || !window.createImageBitmap) return reject(new Error('worker not supported'));
+    let w;
+    try { w = new Worker('ai-worker.js'); } catch (e) { return reject(e); }
+    const timer = setTimeout(() => { w.terminate(); reject(new Error('worker timeout')); }, 120000);
+    w.onmessage = ({ data }) => {
+      if (data.type === 'ready') { clearTimeout(timer); aiWorker = w; resolve(); return; }
+      if (data.type === 'fail') { clearTimeout(timer); w.terminate(); reject(new Error(data.error)); return; }
+      const p = aiPending.get(data.id); if (!p) return;
+      aiPending.delete(data.id);
+      if (data.tensors != null) workerTensors = data.tensors;
+      data.error ? p.reject(new Error(data.error)) : p.resolve(data.det);
+    };
+    w.onerror = e => {
+      clearTimeout(timer);
+      aiPending.forEach(p => p.reject(new Error('AI worker crashed'))); aiPending.clear();
+      if (aiWorker) { aiWorker = null; kioskReload('AI หยุดทำงาน'); } else reject(new Error(e.message || 'worker error'));
+    };
+  });
+}
+async function aiDetect(video, full) {
+  if (!aiWorker) {
+    const q = faceapi.detectSingleFace(video, detOpts).withFaceLandmarks();
+    return full ? q.withFaceDescriptor() : q;
+  }
+  const bitmap = await createImageBitmap(video);
+  return new Promise((resolve, reject) => {
+    const id = ++aiReq;
+    aiPending.set(id, { resolve, reject });
+    aiWorker.postMessage({ id, bitmap, full }, [bitmap]);
+  });
+}
 const modelsReady = (async () => {
   if (!window.faceapi) throw new Error('โหลดไลบรารี face-api ไม่ได้ (ตรวจสอบอินเทอร์เน็ต)');
+  try { await startWorkerAI(); aiState = 'ready'; return; }
+  catch (e) { console.warn('AI worker unavailable, running on the page:', e.message); }
   await faceapi.tf.ready();
   await Promise.all([
     faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
@@ -996,7 +1034,7 @@ async function startCamera(video, placeholder, quiet = false) {
   }
 }
 function stopCamera() { if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } }
-function detect(video) { return faceapi.detectSingleFace(video, detOpts).withFaceLandmarks().withFaceDescriptor(); }
+function detect(video) { return aiDetect(video, true); }
 function drawBox(canvas, video, det, color) {
   if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth;
   if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight;
@@ -1089,7 +1127,7 @@ async function kioskLoop(gen) {
       // once someone is recognised, liveness frames skip the slow face-recognition step (3-4x more frames per second)
       const fast = cand && settings.liveness && !cand.live.done && Date.now() - cand.lastMatch < 1500;
       const t0 = performance.now();
-      const det = fast ? await faceapi.detectSingleFace(video, detOpts).withFaceLandmarks() : await detect(video);
+      const det = fast ? await aiDetect(video, false) : await detect(video);
       lastDetectMs = performance.now() - t0;
       detectErrors = 0; loopStalls = 0;   // the AI answered, so it is healthy again
       if (det) lastFaceAt = Date.now();
@@ -1159,7 +1197,7 @@ setInterval(() => {
     console.warn('restart scan loop'); runLoop();
   }
   // leaked GPU memory makes tablets crawl; start fresh
-  if (faceapi.tf.memory().numTensors > 3000 && !cand) kioskReload('หน่วยความจำเต็ม');
+  if (Math.max(faceapi.tf.memory().numTensors, workerTensors) > 3000 && !cand) kioskReload('หน่วยความจำเต็ม');
 }, 3000);
 let resumeKiosk = false;
 document.addEventListener('visibilitychange', () => {

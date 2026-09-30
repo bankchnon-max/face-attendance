@@ -2,10 +2,10 @@
 // - App files: network first (so updates show up), cached copy when offline.
 // - Face-api library + AI models + supabase-js from the CDN: cache first (they never change for a pinned version).
 // - Supabase API calls are never cached.
-const VERSION = 'v10';
+const VERSION = 'v11';
 const APP_CACHE = `att-app-${VERSION}`;
 const CDN_CACHE = 'att-cdn-v1';
-const APP_FILES = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
+const APP_FILES = ['./', './index.html', './ai-worker.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(APP_CACHE).then(c => c.addAll(APP_FILES)).then(() => self.skipWaiting()));
