@@ -974,25 +974,32 @@ function buildMatcher() {
     .map(e => new faceapi.LabeledFaceDescriptors(e.id, e.descriptors.map(d => new Float32Array(d))));
   matcher = labeled.length ? new faceapi.FaceMatcher(labeled, Number(settings.threshold)) : null;
 }
-async function startCamera(video, placeholder) {
+let camOpening = null;
+async function startCamera(video, placeholder, quiet = false) {
   try {
-    if (!stream) stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }, audio: false });
-    video.srcObject = stream;
-    await video.play();
+    // two starts at once (quick menu switching, screen waking up) used to cancel each other and leave the camera dead
+    if (!stream || stream.getVideoTracks().every(t => t.readyState === 'ended')) {
+      if (!camOpening) camOpening = navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }, audio: false }).finally(() => { camOpening = null; });
+      stream = await camOpening;
+    }
+    if (video.srcObject !== stream) video.srcObject = stream;
+    watchFrames(video);
+    try { await video.play(); } catch (e) { if (e.name !== 'AbortError') throw e; await video.play(); }
     if (placeholder) placeholder.style.display = 'none';
     return true;
   } catch (err) {
     const msg = err.name === 'NotAllowedError' ? 'ไม่ได้รับอนุญาตให้ใช้กล้อง กรุณาอนุญาตในเบราว์เซอร์แล้วรีเฟรช'
       : err.name === 'NotFoundError' ? 'ไม่พบกล้องในเครื่องนี้' : 'เปิดกล้องไม่ได้: ' + err.message;
     if (placeholder) { placeholder.style.display = 'grid'; placeholder.textContent = msg; }
-    toast(msg, 'err');
+    if (!quiet) toast(msg, 'err');
     return false;
   }
 }
 function stopCamera() { if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; } }
 function detect(video) { return faceapi.detectSingleFace(video, detOpts).withFaceLandmarks().withFaceDescriptor(); }
 function drawBox(canvas, video, det, color) {
-  canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+  if (canvas.width !== video.videoWidth) canvas.width = video.videoWidth;
+  if (canvas.height !== video.videoHeight) canvas.height = video.videoHeight;
   const ctx = canvas.getContext('2d');
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (!det) return;
@@ -1048,31 +1055,121 @@ function updateLiveness(l, lm) {
 
 /* ---------- kiosk ---------- */
 let kioskOn = false, cand = null, pauseUntil = 0, resultTimer = null;
-async function startKiosk() {
-  if (kioskOn) return;
-  kioskOn = true;
-  // open the camera while the AI finishes loading
-  const [ok, ai] = await Promise.all([startCamera($('#kVideo'), $('#kPlaceholder')), waitForAI($('#kStatus'))]);
-  if (!ok) { kioskOn = false; setStatus($('#kStatus'), 'err', 'กล้องไม่พร้อมใช้งาน'); return; }
-  if (!ai || !kioskOn) { kioskOn = false; return; }
-  setStatus($('#kStatus'), 'idle', 'มองกล้องเพื่อลงเวลา');
-  kioskLoop();
+// loop bookkeeping for the watchdog
+let loopGen = 0, lastLoopAt = 0, lastDetectMs = 100, lastFaceAt = 0, detectErrors = 0;
+// kioskWanted = the scan screen should be running; kioskOn = the camera + loop actually are.
+let kioskWanted = false, kioskStarting = null, lastStartTry = 0;
+function startKiosk(retry = false) {
+  kioskWanted = true;
+  if (kioskOn) return Promise.resolve();
+  if (!kioskStarting) kioskStarting = (async () => {
+    lastStartTry = Date.now();
+    // open the camera while the AI finishes loading
+    const [ok, ai] = await Promise.all([startCamera($('#kVideo'), $('#kPlaceholder'), retry), waitForAI($('#kStatus'))]);
+    if (!kioskWanted) { if (currentView !== 'kiosk' && !enrolling) stopCamera(); return; }   // left the scan screen meanwhile
+    if (!ok) { setStatus($('#kStatus'), 'err', 'กล้องไม่พร้อมใช้งาน — ระบบจะลองเปิดใหม่อัตโนมัติ'); return; }
+    if (!ai) return;
+    kioskOn = true;
+    setStatus($('#kStatus'), 'idle', 'มองกล้องเพื่อลงเวลา');
+    requestWakeLock();
+    runLoop();
+  })().finally(() => { kioskStarting = null; });
+  return kioskStarting;
 }
-function stopKiosk() { kioskOn = false; cand = null; }
-async function kioskLoop() {
-  if (!kioskOn) return;
+function stopKiosk() { kioskWanted = false; kioskOn = false; cand = null; loopGen++; }
+// Only one loop may run: each start gets a new generation and older loops exit on their next turn.
+// (Leaving and returning to the scan screen quickly used to leave two loops running, doubling the load.)
+function runLoop() { lastLoopAt = Date.now(); kioskLoop(++loopGen); }
+async function kioskLoop(gen) {
+  if (!kioskOn || gen !== loopGen) return;
+  lastLoopAt = Date.now();
   const video = $('#kVideo');
   try {
     if (video.readyState >= 2 && Date.now() > pauseUntil) {
       // once someone is recognised, liveness frames skip the slow face-recognition step (3-4x more frames per second)
       const fast = cand && settings.liveness && !cand.live.done && Date.now() - cand.lastMatch < 1500;
+      const t0 = performance.now();
       const det = fast ? await faceapi.detectSingleFace(video, detOpts).withFaceLandmarks() : await detect(video);
-      if (kioskOn) handleKiosk(det, video);
+      lastDetectMs = performance.now() - t0;
+      detectErrors = 0; loopStalls = 0;   // the AI answered, so it is healthy again
+      if (det) lastFaceAt = Date.now();
+      if (kioskOn && gen === loopGen) handleKiosk(det, video);
     }
-  } catch (e) { console.error(e); }
+  } catch (e) {
+    console.error(e);
+    // the GPU was lost or keeps failing: a fresh start is the only reliable fix
+    if (++detectErrors >= 15) { kioskReload('การประมวลผลภาพผิดพลาดต่อเนื่อง'); return; }
+  }
   if (leaveIdentify) { $('#lvStatus').className = $('#kStatus').className; $('#lvStatus').textContent = $('#kStatus').textContent === 'มองกล้องเพื่อลงเวลา' ? 'มองกล้อง แล้วหันหน้าไปด้านข้างเล็กน้อยเพื่อยืนยันตัวตน' : $('#kStatus').textContent; }
-  if (kioskOn) setTimeout(kioskLoop, cand ? 15 : 60);   // run faster while someone is in front of the camera
+  // Pace to the device: flat out only while someone is being checked; otherwise leave the tablet time to
+  // redraw the screen and handle taps, and slow right down when nobody has been in front of the camera for a while.
+  const idle = !cand && Date.now() - lastFaceAt > 20000;
+  const delay = cand ? Math.max(15, lastDetectMs * 0.3) : idle ? 400 : Math.max(60, lastDetectMs * 0.6);
+  if (kioskOn && gen === loopGen) setTimeout(() => kioskLoop(gen), delay);
 }
+
+/* keep the kiosk alive: watchdog, screen wake lock, sleep / background handling */
+let wakeLock = null;
+async function requestWakeLock() {
+  try { if ('wakeLock' in navigator && !document.hidden && !wakeLock) { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => { wakeLock = null; }); } } catch {}
+}
+function kioskReload(why) {
+  // never reload in a loop: at most once every 3 minutes
+  const last = Number(store.get('lastReload', 0));
+  if (Date.now() - last < 180000) { setStatus($('#kStatus'), 'err', 'กล้องหรือ AI ค้าง กรุณาปิดแอปแล้วเปิดใหม่'); return; }
+  store.set('lastReload', Date.now()); store.set('lastReloadWhy', why);
+  location.reload();   // login and unsent scans are kept in the device, so nothing is lost
+}
+let camRestarting = false, camRestarts = [];
+async function restartCamera(why) {
+  if (camRestarting || !kioskOn) return;
+  camRestarting = true;
+  console.warn('restart camera:', why);
+  camRestarts = camRestarts.filter(t => Date.now() - t < 600000); camRestarts.push(Date.now());
+  if (camRestarts.length > 5) { camRestarting = false; kioskReload('กล้องค้างซ้ำหลายครั้ง'); return; }
+  stopCamera(); lastVideoTime = -1; videoStuckSince = 0;
+  const ok = await startCamera($('#kVideo'), $('#kPlaceholder'));
+  camRestarting = false;
+  if (ok && kioskOn) runLoop();
+}
+let lastVideoTime = -1, videoStuckSince = 0, loopStalls = 0, lastFrameAt = 0;
+// Count real new camera frames (the video clock keeps running even when the picture is frozen).
+function watchFrames(video) {
+  lastFrameAt = Date.now();
+  if (!('requestVideoFrameCallback' in video) || video.__watching) return;
+  video.__watching = true;
+  const onFrame = () => { lastFrameAt = Date.now(); video.requestVideoFrameCallback(onFrame); };
+  video.requestVideoFrameCallback(onFrame);
+}
+setInterval(() => {
+  if (kioskWanted && !kioskOn && !kioskStarting && currentUser && !document.hidden && currentView === 'kiosk' && Date.now() - lastStartTry > 10000) { startKiosk(true); return; }
+  if (!kioskOn || document.hidden || !currentUser || camRestarting) return;
+  const v = $('#kVideo'), track = stream && stream.getVideoTracks()[0];
+  // camera stopped, or the picture has not changed for 5 s (frozen image)
+  if (!track || track.readyState === 'ended' || v.paused) { restartCamera('camera stopped'); return; }
+  if ('requestVideoFrameCallback' in v) {
+    if (Date.now() - lastFrameAt > 5000) { restartCamera('frozen picture'); return; }
+  } else if (v.currentTime === lastVideoTime) {
+    if (!videoStuckSince) videoStuckSince = Date.now();
+    else if (Date.now() - videoStuckSince > 5000) { restartCamera('frozen picture'); return; }
+  } else { lastVideoTime = v.currentTime; videoStuckSince = 0; }
+  // the AI loop has not come round for 10 s: a GPU call never returned
+  if (Date.now() - lastLoopAt > 10000) {
+    if (++loopStalls >= 2) { kioskReload('AI ค้าง'); return; }
+    console.warn('restart scan loop'); runLoop();
+  }
+  // leaked GPU memory makes tablets crawl; start fresh
+  if (faceapi.tf.memory().numTensors > 3000 && !cand) kioskReload('หน่วยความจำเต็ม');
+}, 3000);
+let resumeKiosk = false;
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    // screen off / app in background: release the camera cleanly instead of leaving it frozen
+    if (kioskWanted) { stopKiosk(); stopCamera(); resumeKiosk = true; }
+  } else if (resumeKiosk && currentUser && currentView === 'kiosk') {
+    resumeKiosk = false; startKiosk();
+  } else if (!document.hidden && kioskOn) requestWakeLock();
+});
 function handleKiosk(det, video) {
   const st = $('#kStatus'), canvas = $('#kCanvas'), now = Date.now();
   if (!det) {
@@ -1556,8 +1653,10 @@ function showView(name) {
 }
 $('#nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) showView(b.dataset.view); });
 let tickDay = dayKey(Date.now());
+let nightlyDone = dayKey(Date.now());
 function tick() {
   const now = new Date();
+  if (kioskOn && now.getHours() === 3 && nightlyDone !== dayKey(now) && !cand && !outbox.length) { nightlyDone = dayKey(now); store.set('lastReload', 0); kioskReload('รีสตาร์ทประจำคืน'); return; }
   if (dayKey(now) !== tickDay) { tickDay = dayKey(now); if (currentUser) renderKioskSide(); }
   $('#bigClock').textContent = hms(now);
   $('#clockSm').textContent = hm(now);
