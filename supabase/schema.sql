@@ -31,6 +31,7 @@ create table public.att_events (
   live boolean not null default false,
   source text not null default 'face' check (source in ('face','manual','hr')),
   snap text,
+  station text,                         -- หน้างานที่เลือกตอนสแกนเข้างาน: cut / line / picnic / other (ใช้แบ่งค่าแรงลงต้นทุน)
   created_by uuid default auth.uid(),
   created_at timestamptz not null default now()
 );
@@ -168,3 +169,5 @@ alter publication supabase_realtime add table public.att_wages;
 
 -- a factory holiday can be a paid public holiday
 alter table public.att_calendar add column paid boolean not null default false;
+
+-- เพิ่มทีหลัง (ฐานข้อมูลเดิม): alter table public.att_events add column if not exists station text;

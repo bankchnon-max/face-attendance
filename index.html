@@ -76,6 +76,12 @@ main{max-width:1280px;margin:0 auto;padding:20px 16px 48px}
 .result img{width:64px;height:64px;border-radius:50%;object-fit:cover;background:var(--surface-2)}
 .result .name{font-weight:700;font-size:19px}
 .result .sub{color:var(--muted)}
+.result .stations{display:none;flex-wrap:wrap;gap:8px;margin-top:10px;max-width:440px}
+.result .stations.show{display:flex}
+.result .stations .lbl{width:100%;font-size:13px;color:var(--muted)}
+.result .stations button{min-width:86px;min-height:64px;border-radius:12px;border:2px solid var(--line,#d6dbe1);background:var(--surface-2);color:var(--text);font-weight:600;font-size:15px;font-family:inherit;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:6px 10px}
+.result .stations button .ic{font-size:26px;line-height:1}
+.result .stations button.on{border-color:var(--accent,#2bb39f);box-shadow:0 0 0 2px var(--accent,#2bb39f) inset}
 .bigclock{font-size:52px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
 .date{color:var(--muted);margin-bottom:14px}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
@@ -244,6 +250,7 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
             <div>
               <div class="name" id="kResName"></div>
               <div class="sub" id="kResSub"></div>
+              <div class="stations" id="kStations"></div>
             </div>
           </div>
         </div>
@@ -332,7 +339,7 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
       <h3>สรุปรายวัน</h3>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>ชื่อ</th><th>แผนก</th><th>เข้างาน</th><th>ออกงาน</th><th>ชั่วโมงทำงาน</th><th>สาย (นาที)</th><th>OT เที่ยง</th><th>OT เย็น</th><th>สถานะ</th></tr></thead>
+          <thead><tr><th>ชื่อ</th><th>แผนก</th><th>หน้างาน</th><th>เข้างาน</th><th>ออกงาน</th><th>ชั่วโมงทำงาน</th><th>สาย (นาที)</th><th>OT เที่ยง</th><th>OT เย็น</th><th>สถานะ</th></tr></thead>
           <tbody id="rBody"></tbody>
         </table>
       </div>
@@ -627,7 +634,10 @@ const store = {
 const DEFAULTS = {
   shiftStart: '08:30', shiftEnd: '17:30', grace: 5, cooldown: 60, threshold: 0.5, liveness: true, sound: true, voice: true,
   workDays: [1, 2, 3, 4, 5, 6], leaveQuota: { sick: 30, personal: 3, vacation: 6 }, lunchStart: '12:00', lunchEnd: '13:00', lunchScan: true, otAfter: 30, otRound: 30, halfDayHours: 5,
-  payroll: { hoursPerDay: 8, otMult: 1.5, holidayMult: 2, holidayOtMult: 3, payLeave: true, sso: true, ssoRate: 5, ssoMinBase: 1650, ssoMaxBase: 17500 }
+  payroll: { hoursPerDay: 8, otMult: 1.5, holidayMult: 2, holidayOtMult: 3, payLeave: true, sso: true, ssoRate: 5, ssoMinBase: 1650, ssoMaxBase: 17500 },
+  // หน้างานที่ให้เลือกตอนสแกนเข้างาน (ใช้แบ่งค่าแรงลงต้นทุนในแอพต้นทุน)
+  stationPick: true, stationWait: 8,
+  stations: [{ id: 'cut', icon: '✂️', name: 'ตัดผ้า' }, { id: 'line', icon: '🏭', name: 'ไลน์' }, { id: 'picnic', icon: '🧺', name: 'แพ็คปิกนิก' }, { id: 'other', icon: '📦', name: 'อื่นๆ' }]
 };
 let employees = [];
 let events = [];      // only the months that have been loaded (see ensureMonth)
@@ -645,9 +655,9 @@ const ms = s => s == null ? null : Date.parse(s);
 
 const empFromRow = r => ({ id: r.id, name: r.name, dept: r.dept || '', descriptors: r.descriptors || [], photo: r.photo, consentAt: ms(r.consent_at), createdAt: ms(r.created_at) });
 const empToRow = e => ({ id: e.id, name: e.name, dept: e.dept || null, descriptors: e.descriptors, photo: e.photo || null, consent_at: iso(e.consentAt), created_at: iso(e.createdAt || Date.now()) });
-const evFromRow = r => ({ id: r.id, empId: r.emp_id, time: ms(r.time), type: r.type, score: r.score, live: r.live, source: r.source, snap: r.snap ?? null });
+const evFromRow = r => ({ id: r.id, empId: r.emp_id, time: ms(r.time), type: r.type, score: r.score, live: r.live, source: r.source, snap: r.snap ?? null, station: r.station ?? null });
 const leaveFromRow = r => ({ id: r.id, empId: r.emp_id, type: r.type, start: r.start_date, end: r.end_date, part: r.part, reason: r.reason || '', status: r.status, source: r.source, snap: r.snap, requestedAt: ms(r.requested_at), decidedAt: ms(r.decided_at), note: r.decision_note || '' });
-const evToRow = e => ({ id: e.id, emp_id: e.empId, time: iso(e.time), type: e.type, score: e.score ?? null, live: !!e.live, source: e.source || 'face', snap: e.snap || null });
+const evToRow = e => ({ id: e.id, emp_id: e.empId, time: iso(e.time), type: e.type, score: e.score ?? null, live: !!e.live, source: e.source || 'face', snap: e.snap || null, station: e.station || null });
 
 async function fetchAll(makeQuery) {
   const out = [];
@@ -669,7 +679,7 @@ function ensureMonth(month) {
   if (monthLoads.has(month)) return monthLoads.get(month);
   const [y, m] = month.split('-').map(Number);
   const from = new Date(y, m - 1, 1).toISOString(), to = new Date(y, m, 1).toISOString();
-  const p = fetchAll(() => sb.from('att_events').select('id,emp_id,time,type,score,live,source').gte('time', from).lt('time', to).order('time'))
+  const p = fetchAll(() => sb.from('att_events').select('id,emp_id,time,type,score,live,source,station').gte('time', from).lt('time', to).order('time'))
     .then(rows => { mergeEvents(rows.map(evFromRow)); return true; })
     .catch(err => { monthLoads.delete(month); monthFailedAt.set(month, Date.now()); if (navigator.onLine) toast('โหลดข้อมูลลงเวลาไม่สำเร็จ: ' + err.message, 'err'); return false; });
   monthLoads.set(month, p);
@@ -730,11 +740,22 @@ async function deleteEvent(id) {
 }
 // Attendance events go through an outbox so the kiosk keeps working when the internet drops
 let outbox = store.get('outbox', []), flushing = false, lastSyncError = null;
-function pushEvent(ev) { outbox.push(evToRow(ev)); store.set('outbox', outbox); renderSync(); flushOutbox(); }
+function pushEvent(ev, holdMs) {
+  const row = evToRow(ev);
+  if (holdMs) { row._hold = Date.now() + holdMs; setTimeout(flushOutbox, holdMs + 300); }   // รอเลือกหน้างานก่อนส่ง (อยู่ในคิวแล้ว ไม่หายถ้าปิดเครื่อง)
+  outbox.push(row); store.set('outbox', outbox); renderSync(); flushOutbox();
+}
+// เลือกหน้างานแล้ว (หรือหมดเวลา) → ปล่อยให้ส่ง
+function releaseHeld(id, station) {
+  const row = outbox.find(r => r.id === id);
+  if (row) { if (station !== undefined) row.station = station; delete row._hold; store.set('outbox', outbox); flushOutbox(); }
+}
 async function flushOutbox() {
   if (flushing || !outbox.length || !currentUser) return renderSync();
   flushing = true;
-  const batch = outbox.slice(0, 200);
+  const now = Date.now();
+  const batch = outbox.filter(r => !(r._hold > now)).slice(0, 200).map(({ _hold, ...r }) => r);
+  if (!batch.length) { flushing = false; return renderSync(); }
   try {
     const { error } = await sb.from('att_events').upsert(batch, { onConflict: 'id', ignoreDuplicates: true });
     if (error) throw error;
@@ -992,13 +1013,22 @@ function recordEvent(emp, { score = null, live = false, source = 'face', snap = 
     type = 'lunch';
   }
   const ev = { id: uid(), empId: emp.id, time: now, type, score, live, source, snap };
+  const pick = type === 'in' && settings.stationPick && (settings.stations || []).length > 0;
+  if (pick) ev.station = lastStation(emp.id);
   events.push(ev);
   // keep snapshots only for the latest 300 events to save browser storage
   let withSnap = 0;
   for (let i = events.length - 1; i >= 0; i--) if (events[i].snap && ++withSnap > 300) events[i].snap = null;
-  pushEvent(ev);
-  return { ev };
+  pushEvent(ev, pick ? ((+settings.stationWait || 8) + 30) * 1000 : 0);
+  return { ev, pick };
 }
+/* หน้างานล่าสุดที่คนนี้เคยเลือก — ไม่เคย = "อื่นๆ" (หรือหน้างานแรกในรายการ) */
+function lastStation(empId) {
+  const st = settings.stations || [];
+  const prev = events.filter(e => e.empId === empId && e.station && st.some(x => x.id === e.station)).sort((a, b) => a.time - b.time).pop();
+  return prev ? prev.station : ((st.find(x => x.id === 'other') || st[0] || {}).id || null);
+}
+const stationLabel = id => { const x = (settings.stations || []).find(s => s.id === id); return x ? `${x.icon} ${x.name}` : (id || '-'); };
 const TYPE_LABEL = { in: 'เข้างาน', out: 'ออกงาน', lunch: 'OT เที่ยง' };
 const MIN_OUT_AFTER_IN = 30; // minutes: scanning again sooner than this after checking in is treated as a repeat
 function renderLunchBanner() {
@@ -1317,8 +1347,42 @@ function handleKiosk(det, video) {
   cand = null;
   showResult(emp, res);
 }
+let stationTimer = null, stationPending = null;
+/* ปิดตัวเลือกหน้างานที่ค้างอยู่ — ส่งตามที่เลือก (หรือหน้างานเริ่มต้น) */
+function commitStation(station) {
+  const p = stationPending; if (!p) return;
+  stationPending = null; clearTimeout(stationTimer);
+  if (station) p.ev.station = station;
+  releaseHeld(p.ev.id, p.ev.station);
+  $('#kStations').classList.remove('show'); $('#kStations').innerHTML = '';
+}
+function showStationPicker(emp, ev) {
+  const box = $('#kStations'), wait = (+settings.stationWait || 8);
+  stationPending = { ev };
+  const draw = left => {
+    box.innerHTML = `<div class="lbl">วันนี้อยู่หน้างานไหน? แตะ 1 ครั้ง (ไม่แตะใน ${left} วิ = ${esc(stationLabel(ev.station))})</div>` +
+      (settings.stations || []).map(x => `<button type="button" data-st="${esc(x.id)}" class="${x.id === ev.station ? 'on' : ''}"><span class="ic">${esc(x.icon)}</span>${esc(x.name)}</button>`).join('');
+  };
+  let left = wait; draw(left); box.classList.add('show');
+  clearTimeout(stationTimer);
+  const tick = () => {
+    if (!stationPending || stationPending.ev !== ev) return;
+    left--;
+    if (left <= 0) { commitStation(); $('#kResult').classList.remove('show'); return; }
+    draw(left); stationTimer = setTimeout(tick, 1000);
+  };
+  stationTimer = setTimeout(tick, 1000);
+}
+$('#kStations').addEventListener('click', e => {
+  const b = e.target.closest('[data-st]'); if (!b || !stationPending) return;
+  const st = b.dataset.st; commitStation(st);
+  setStatus($('#kStatus'), 'ok', `✓ หน้างาน: ${stationLabel(st)}`);
+  pauseUntil = Date.now() + 800; clearTimeout(resultTimer);
+  resultTimer = setTimeout(() => $('#kResult').classList.remove('show'), 1200);
+});
 function showResult(emp, res) {
   const st = $('#kStatus');
+  if (stationPending) commitStation();   // คนก่อนหน้ายังไม่ได้เลือก → ใช้หน้างานเริ่มต้น
   pauseUntil = Date.now() + 3000;
   drawBox($('#kCanvas'), $('#kVideo'), null);
   const img = (res.ev?.snap) || emp.photo; $('#kResImg').style.visibility = img ? 'visible' : 'hidden'; if (img) $('#kResImg').src = img;
@@ -1344,6 +1408,7 @@ function showResult(emp, res) {
   }
   $('#kResult').classList.add('show');
   clearTimeout(resultTimer);
+  if (res.pick && res.ev) { showStationPicker(emp, res.ev); pauseUntil = Date.now() + 1500; return; }
   resultTimer = setTimeout(() => $('#kResult').classList.remove('show'), 3000);
 }
 function renderKioskSide() {
@@ -1491,6 +1556,7 @@ function renderReports() {
   ]);
   $('#rBody').innerHTML = rows.length ? rows.map(({ e, s }) => `
     <tr><td>${esc(e.name)}</td><td>${esc(e.dept || '-')}</td>
+    <td>${stationCell(e, key)}</td>
     <td class="num">${s.firstIn ? hm(s.firstIn) : '-'}</td><td class="num">${s.lastOut ? hm(s.lastOut) : '-'}</td>
     <td class="num">${fmtMin(s.workedMin)}</td><td class="num">${s.late || '-'}</td>
     <td class="num">${s.lunchMin ? fmtMin(s.lunchMin) : '-'}</td>
@@ -1512,6 +1578,21 @@ function renderReports() {
       <td><button class="btn sm danger" data-delev="${ev.id}">ลบ</button></td></tr>`;
   }).join('') : '<tr><td colspan="8" class="empty">ไม่มีบันทึกในวันนี้</td></tr>';
 }
+/* หน้างานของวันนั้น = จากรายการเข้างานแรกของวัน · HR เปลี่ยนได้ */
+function stationCell(emp, key) {
+  const inEv = events.filter(x => x.empId === emp.id && x.type === 'in' && dayKey(x.time) === key).sort((a, b) => a.time - b.time)[0];
+  if (!inEv) return '-';
+  const opts = (settings.stations || []).map(x => `<option value="${esc(x.id)}"${x.id === inEv.station ? ' selected' : ''}>${esc(x.icon)} ${esc(x.name)}</option>`).join('');
+  return `<select data-stev="${inEv.id}" style="min-width:120px"><option value=""${inEv.station ? '' : ' selected'}>— ไม่ระบุ —</option>${opts}</select>`;
+}
+$('#rBody').addEventListener('change', async e => {
+  const sel = e.target.closest('[data-stev]'); if (!sel) return;
+  const id = sel.dataset.stev, st = sel.value || null, ev = events.find(x => x.id === id);
+  const inQueue = outbox.find(r => r.id === id);
+  if (inQueue) { inQueue.station = st; store.set('outbox', outbox); toast('เปลี่ยนหน้างานแล้ว', 'ok'); }
+  else if (!(await dbCall(sb.from('att_events').update({ station: st }).eq('id', id), 'เปลี่ยนหน้างานแล้ว'))) { renderReports(); return; }
+  if (ev) ev.station = st;
+});
 const leaveCell = r => { const parts = Object.entries(r.leave).filter(([, v]) => v).map(([t, v]) => `${LEAVE_TYPES[t].replace('ลา', '')} ${fmtDays(v)}`); return parts.length ? parts.join(', ') : '-'; };
 function renderMonthSummary() {
   const m = $('#rMonth').value || dayKey(Date.now()).slice(0, 7);
@@ -1863,7 +1944,7 @@ $('#btnBackup').addEventListener('click', async () => {
     const [emps, evs, lvs] = await Promise.all([
       fetchAll(() => sb.from('att_employees').select('*').order('name')),
       fetchAll(() => sb.from('att_leaves').select('id,emp_id,type,start_date,end_date,part,reason,status,source,requested_at,decided_by,decided_at,decision_note')),
-      fetchAll(() => sb.from('att_events').select('id,emp_id,time,type,score,live,source').order('time'))
+      fetchAll(() => sb.from('att_events').select('id,emp_id,time,type,score,live,source,station').order('time'))
     ]);
     const leavesBackup = lvs;
     downloadFile(`face-attendance-backup-${dayKey(Date.now())}.json`, JSON.stringify({ version: 3, exportedAt: new Date().toISOString(), employees: emps.map(empFromRow), events: evs.map(evFromRow), leaves: leavesBackup, wages, settings, calendar }), 'application/json');
