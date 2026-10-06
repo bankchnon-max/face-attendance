@@ -76,6 +76,14 @@ main{max-width:1280px;margin:0 auto;padding:20px 16px 48px}
 .result img{width:64px;height:64px;border-radius:50%;object-fit:cover;background:var(--surface-2)}
 .result .name{font-weight:700;font-size:19px}
 .result .sub{color:var(--muted)}
+.ask{position:absolute;left:50%;top:14px;transform:translateX(-50%);background:var(--surface);color:var(--text);border-radius:16px;padding:14px 16px;display:none;align-items:center;gap:14px;box-shadow:0 8px 30px rgba(0,0,0,.35);width:min(94%,520px);border:3px solid var(--accent)}
+.ask.show{display:flex}
+.ask img{width:76px;height:76px;border-radius:12px;object-fit:cover;background:var(--surface-2);flex:none}
+.ask .grow{flex:1;min-width:0}
+.ask .q{font-size:14px;color:var(--muted)}
+.ask .name{font-size:26px;font-weight:700;line-height:1.2;word-break:break-word}
+.ask .sub{font-size:15px;margin-top:2px}
+.ask .btn{flex:none;min-height:56px;font-size:16px;font-weight:600}
 .result .stations{display:none;flex-wrap:wrap;gap:8px;margin-top:10px;max-width:440px}
 .result .stations.show{display:flex}
 .result .stations .lbl{width:100%;font-size:13px;color:var(--muted)}
@@ -245,6 +253,15 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
           <video id="kVideo" playsinline muted></video>
           <canvas id="kCanvas"></canvas>
           <div class="placeholder" id="kPlaceholder">กำลังเปิดกล้อง…</div>
+          <div class="ask" id="kAsk">
+            <img id="kAskImg" alt="">
+            <div class="grow">
+              <div class="q">ใช่คุณ…</div>
+              <div class="name" id="kAskName"></div>
+              <div class="sub">ถ้าใช่ <b>หันหน้าไปทางซ้ายหรือขวา</b></div>
+            </div>
+            <button type="button" class="btn" id="kNotMe">ไม่ใช่ฉัน</button>
+          </div>
           <div class="result" id="kResult">
             <img id="kResImg" alt="">
             <div>
@@ -469,7 +486,7 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
           <label class="f"><span>ความเข้มงวดการจับคู่ใบหน้า: <b id="sThrLabel"></b></span>
             <div class="range-row"><span class="small muted">เข้มงวด</span><input type="range" id="sThr" min="0.35" max="0.65" step="0.01"><span class="small muted">ผ่อนปรน</span></div>
           </label>
-          <label class="check"><input type="checkbox" id="sLive"><span>ตรวจว่าเป็นคนจริง (หันหน้าเล็กน้อยหรือกระพริบตา) เพื่อกันการใช้รูปถ่าย</span></label>
+          <label class="check"><input type="checkbox" id="sLive"><span>ประกาศชื่อด้วยเสียง แล้วให้<b>หันหน้ายืนยัน</b>ก่อนบันทึก (กันจำหน้าผิดคน และกันการใช้รูปถ่าย)</span></label>
           <label class="check"><input type="checkbox" id="sSound"><span>เสียงแจ้งเตือน</span></label>
           <label class="check"><input type="checkbox" id="sVoice"><span>เสียงพูดทักทาย</span></label>
           <div class="actions"><button class="btn primary" type="submit">บันทึกการตั้งค่า</button></div>
@@ -844,7 +861,12 @@ function beep(ok = true) {
 }
 function speak(text) {
   if (!settings.voice || !('speechSynthesis' in window)) return;
-  try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text); u.lang = 'th-TH'; u.rate = 1.05; speechSynthesis.speak(u); } catch {}
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text); u.lang = 'th-TH'; u.rate = 1.0;
+    const th = speechSynthesis.getVoices().find(v => /^th/i.test(v.lang)); if (th) u.voice = th;
+    speechSynthesis.speak(u);
+  } catch {}
 }
 
 /* ---------- attendance rules ---------- */
@@ -1173,6 +1195,14 @@ function faceYaw(lm) {
   const p = lm.positions, w = p[16].x - p[0].x;          // jaw edges
   return w > 0 ? (p[30].x - p[0].x) / w : 0.5;           // nose tip position: 0.5 = looking straight
 }
+// Confirmation = a deliberate head turn after the name was announced (measured from the pose at that moment).
+// A flat photo cannot turn: tilting it squeezes the whole face evenly, so the nose stays centred.
+function updateTurn(l, lm) {
+  const signed = faceYaw(lm) - 0.5;
+  if (l.startYaw === null) l.startYaw = signed;
+  if (Math.abs(signed - l.startYaw) > 0.12) l.turned = true;
+  l.done = l.turned;
+}
 function updateLiveness(l, lm) {
   l.frames++;
   // head turn is measured from where the face started, so a camera mounted off to one side still works
@@ -1215,7 +1245,7 @@ function startKiosk(retry = false) {
   })().finally(() => { kioskStarting = null; });
   return kioskStarting;
 }
-function stopKiosk() { kioskWanted = false; kioskOn = false; cand = null; loopGen++; }
+function stopKiosk() { kioskWanted = false; kioskOn = false; cand = null; loopGen++; $('#kAsk').classList.remove('show'); }
 // Only one loop may run: each start gets a new generation and older loops exit on their next turn.
 // (Leaving and returning to the scan screen quickly used to leave two loops running, doubling the load.)
 function runLoop() { lastLoopAt = Date.now(); kioskLoop(++loopGen); }
@@ -1226,7 +1256,7 @@ async function kioskLoop(gen) {
   try {
     if (video.readyState >= 2 && Date.now() > pauseUntil) {
       // once someone is recognised, liveness frames skip the slow face-recognition step (3-4x more frames per second)
-      const fast = cand && settings.liveness && !cand.live.done && Date.now() - cand.lastMatch < 1500;
+      const fast = cand && cand.phase === 'confirm' && (cand.n = (cand.n || 0) + 1) % 4 !== 0;
       const t0 = performance.now();
       const det = fast ? await aiDetect(video, false) : await detect(video);
       lastDetectMs = performance.now() - t0;
@@ -1309,38 +1339,98 @@ document.addEventListener('visibilitychange', () => {
     resumeKiosk = false; startKiosk();
   } else if (!document.hidden && kioskOn) requestWakeLock();
 });
+// Identify carefully, then ask: the name is shown and spoken, and only a head turn AFTER that records the scan.
+//  - 3 matching frames in a row, each within the threshold, and clearly closer to this person than to anyone
+//    else (MATCH_MARGIN) - two look-alike staff are never guessed between
+//  - "ไม่ใช่ฉัน" or no turn within CONFIRM_WINDOW = nothing is recorded
+const VOTES_NEEDED = 3, MATCH_MARGIN = 0.06, CONFIRM_WINDOW = 12000;
+let askedRecently = null;   // { id, until }: someone who did not confirm is not asked again straight away
+function matchFace(desc) {
+  // mean distance to each person's enrolled samples (what face-api's FaceMatcher uses), best and runner-up
+  let best = null, second = null;
+  for (const ld of matcher.labeledDescriptors) {
+    const d = ld.descriptors.reduce((sum, x) => sum + faceapi.euclideanDistance(x, desc), 0) / ld.descriptors.length;
+    if (!best || d < best.d) { second = best; best = { id: ld.label, d }; }
+    else if (!second || d < second.d) second = { id: ld.label, d };
+  }
+  return { best, second };
+}
+function showAsk(emp) {
+  $('#kAskImg').style.visibility = emp.photo ? 'visible' : 'hidden'; if (emp.photo) $('#kAskImg').src = emp.photo;
+  $('#kAskName').textContent = emp.name + (emp.dept ? ` (${emp.dept})` : '');
+  $('#kAsk').classList.add('show');
+}
+function hideAsk() { $('#kAsk').classList.remove('show'); }
+function resetCand() { cand = null; hideAsk(); }
+$('#kNotMe').addEventListener('click', () => {
+  if (cand?.id) askedRecently = { id: cand.id, until: Date.now() + 8000 };
+  resetCand();
+  setStatus($('#kStatus'), 'warn', 'เลือกชื่อของคุณเพื่อลงเวลา');
+  $('#btnManual').click();
+});
 function handleKiosk(det, video) {
   const st = $('#kStatus'), canvas = $('#kCanvas'), now = Date.now();
   if (!det) {
     if (cand && now - cand.lastSeen < 1500) return;   // a frame or two without a face: keep going
-    cand = null; drawBox(canvas, video, null); setStatus(st, 'idle', 'มองกล้องเพื่อลงเวลา'); return;
+    resetCand(); drawBox(canvas, video, null); setStatus(st, 'idle', 'มองกล้องเพื่อลงเวลา'); return;
   }
-  if (det.detection.box.width < video.videoWidth * 0.16) { drawBox(canvas, video, det, '#e5a93b'); setStatus(st, 'warn', 'กรุณาเข้าใกล้กล้องอีกนิด'); cand = null; return; }
+  if (det.detection.box.width < video.videoWidth * 0.16) { drawBox(canvas, video, det, '#e5a93b'); setStatus(st, 'warn', 'กรุณาเข้าใกล้กล้องอีกนิด'); resetCand(); return; }
   if (!matcher) { drawBox(canvas, video, det, '#e5a93b'); setStatus(st, 'warn', 'ยังไม่มีพนักงานลงทะเบียน ไปที่เมนู "พนักงาน"'); return; }
-  let emp = null, dist = null;
-  if (det.descriptor) {
-    const best = matcher.findBestMatch(det.descriptor);
-    if (best.label !== 'unknown') { emp = empById(best.label); dist = best.distance; }
-  }
-  // while the head is turned the face may not match; keep the person we recognised a moment ago
-  if (!emp && cand && now - cand.lastMatch < 2500) emp = empById(cand.id);
-  if (!emp) {
-    drawBox(canvas, video, det, '#f0796e');
-    cand = null;
-    setStatus(st, 'err', 'ไม่พบข้อมูลใบหน้านี้ในระบบ');
+  const thr = Number(settings.threshold);
+
+  /* step 1: who is it? */
+  if (!cand || cand.phase !== 'confirm') {
+    if (!det.descriptor) return;
+    const { best, second } = matchFace(det.descriptor);
+    if (!best || best.d > thr) { drawBox(canvas, video, det, '#f0796e'); resetCand(); setStatus(st, 'err', 'ไม่พบข้อมูลใบหน้านี้ในระบบ'); return; }
+    if (second && second.d - best.d < MATCH_MARGIN) {
+      drawBox(canvas, video, det, '#e5a93b'); if (cand) cand.votes = [];
+      setStatus(st, 'warn', 'ยังไม่แน่ใจว่าเป็นใคร — มองตรงที่กล้องนิ่งๆ'); return;
+    }
+    if (!cand || cand.votes.length && cand.votes[cand.votes.length - 1].id !== best.id) cand = { phase: 'identify', votes: [], since: now };
+    cand.votes.push({ id: best.id, d: best.d }); cand.lastSeen = now;
+    drawBox(canvas, video, det, '#6aa7ec');
+    if (cand.votes.length < VOTES_NEEDED) { setStatus(st, 'info', 'กำลังตรวจสอบใบหน้า… มองตรงที่กล้อง'); return; }
+    const emp = empById(best.id);
+    if (!emp) { resetCand(); return; }
+    cand.id = emp.id; cand.dist = Math.min(...cand.votes.map(v => v.d)); cand.lastMatch = now;
+    if (askedRecently && askedRecently.id === emp.id && now < askedRecently.until) {
+      cand.votes = []; setStatus(st, 'warn', 'ถ้าชื่อไม่ถูก กด "สแกนไม่ผ่าน? ลงเวลาด้วยการเลือกชื่อ"'); return;
+    }
+    if (!settings.liveness) return finishScan(emp, det, video);   // confirmation turned off in Settings
+    // step 2: say the name and wait for a head turn
+    cand.phase = 'confirm'; cand.askAt = now; cand.live = newLive(); cand.n = 0;
+    showAsk(emp);
+    speak(`คุณ${emp.name} ใช่ไหมคะ ถ้าใช่ หันหน้าไปด้านข้างค่ะ`);
+    setStatus(st, 'info', `คุณ${emp.name} ใช่ไหม? ใช่ → หันหน้าซ้ายหรือขวา · ไม่ใช่ → กด "ไม่ใช่ฉัน"`);
+    drawBox(canvas, video, det, '#2bb39f');
     return;
   }
-  if (!cand || cand.id !== emp.id) cand = { id: emp.id, since: now, hits: 0, lastMatch: now, lastSeen: now, dist: dist ?? 1, live: newLive() };
+
+  /* step 2: waiting for the turn */
   cand.lastSeen = now;
-  if (dist != null) { cand.hits++; cand.lastMatch = now; cand.dist = Math.min(cand.dist, dist); }
-  updateLiveness(cand.live, det.landmarks);
   drawBox(canvas, video, det, '#2bb39f');
-  if (settings.liveness && !cand.live.done) {
-    if (now - cand.since > 15000) { cand.since = now; cand.live = newLive(); }
-    setStatus(st, 'info', `คุณ${emp.name} — หันหน้าไปทางซ้ายหรือขวาเล็กน้อย (หรือกระพริบตา)`);
+  if (det.descriptor) {
+    // a full frame that clearly shows someone else (the person walked away and another stepped in): start over
+    const { best } = matchFace(det.descriptor);
+    if (best && best.id !== cand.id && best.d <= thr - 0.05) { resetCand(); return; }
+  }
+  const emp = empById(cand.id);
+  if (!emp) { resetCand(); return; }
+  if (now - cand.askAt < 700) return;   // let them see/hear the name before a turn counts
+  updateTurn(cand.live, det.landmarks);
+  if (!cand.live.turned) {
+    if (now - cand.askAt > CONFIRM_WINDOW) {
+      askedRecently = { id: cand.id, until: now + 5000 };
+      resetCand();
+      setStatus(st, 'warn', 'ไม่ได้ยืนยัน จึงยังไม่บันทึก — ถ้าชื่อไม่ถูก กด "สแกนไม่ผ่าน? ลงเวลาด้วยการเลือกชื่อ"');
+    }
     return;
   }
-  if (cand.hits < 2) { setStatus(st, 'info', 'กำลังยืนยันตัวตน…'); return; }
+  hideAsk();
+  finishScan(emp, det, video);
+}
+function finishScan(emp, det, video) {
   if (leaveIdentify) { const cb = leaveIdentify; leaveIdentify = null; cand = null; cb(emp, snapshot(video, det.detection.box), 'ยืนยันด้วยใบหน้า'); return; }
   const score = Math.round((1 - cand.dist) * 100);
   const res = recordEvent(emp, { score, live: !!settings.liveness, source: 'face', snap: snapshot(video, det.detection.box) });

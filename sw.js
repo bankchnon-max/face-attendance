@@ -2,7 +2,7 @@
 // - App files: network first (so updates show up), cached copy when offline.
 // - Face-api library + AI models + supabase-js from the CDN: cache first (they never change for a pinned version).
 // - Supabase API calls are never cached.
-const VERSION = 'v13';
+const VERSION = 'v14';
 const APP_CACHE = `att-app-${VERSION}`;
 const CDN_CACHE = 'att-cdn-v1';
 const APP_FILES = ['./', './index.html', './ai-worker.js', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png'];
