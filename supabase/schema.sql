@@ -1,5 +1,5 @@
 -- Face attendance app schema (applied to Supabase as migrations
--- att_face_attendance_schema + att_move_is_staff_to_private_schema + att_drop_employee_code + att_roles_hr_and_kiosk + att_split_write_policies_and_snap_retention + att_leaves + att_wages_and_paid_holidays).
+-- att_face_attendance_schema + att_move_is_staff_to_private_schema + att_drop_employee_code + att_roles_hr_and_kiosk + att_split_write_policies_and_snap_retention + att_leaves + att_wages_and_paid_holidays + att_line_notifications).
 -- Roles: hr = everything; kiosk = read what scanning needs + add scans only.
 -- Only users listed in att_staff can read or write anything.
 
@@ -171,3 +171,26 @@ alter publication supabase_realtime add table public.att_wages;
 alter table public.att_calendar add column paid boolean not null default false;
 
 -- เพิ่มทีหลัง (ฐานข้อมูลเดิม): alter table public.att_events add column if not exists station text;
+
+-- LINE notifications for HR (migration att_line_notifications). Keys and linked chats are only reachable by the
+-- att-line edge function (service role): RLS on with no policies, no grants for anon/authenticated.
+create extension if not exists pg_net;
+create table public.att_line_config (
+  id int primary key default 1 check (id = 1),
+  channel_secret text, channel_token text, bot_name text, bot_basic_id text,
+  link_code text, link_code_expires timestamptz,
+  notify_leave boolean not null default true, notify_daily boolean not null default true,
+  internal_secret text not null default (replace(gen_random_uuid()::text, '-', '') || replace(gen_random_uuid()::text, '-', '')),
+  updated_at timestamptz not null default now()
+);
+insert into public.att_line_config (id) values (1);
+create table public.att_line_targets (
+  line_id text primary key, kind text not null check (kind in ('user','group','room')), name text,
+  created_at timestamptz not null default now()
+);
+alter table public.att_line_config enable row level security;
+alter table public.att_line_targets enable row level security;
+revoke all on public.att_line_config, public.att_line_targets from anon, authenticated;
+-- att_private.notify_line_leave(): trigger after insert on att_leaves (pending) -> POST {type:'leave'} to att-line
+-- att_private.send_line_daily(): pg_cron 'att-line-daily-summary' at 14:00 UTC (21:00 Thailand) -> POST {type:'daily'}
+-- both send the x-internal-secret header from att_line_config; see the migration for the full function bodies.

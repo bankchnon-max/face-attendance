@@ -185,6 +185,11 @@ dialog.wide{width:min(94vw,460px)}
 textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);font:inherit;color:inherit;resize:vertical}
 .wage-in{width:110px;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);text-align:right}
 .wage-in.saved{border-color:var(--ok)}
+.line-steps{margin:0 0 12px;padding-left:20px}
+.line-steps li{margin-bottom:6px}
+.line-code{font-size:34px;font-weight:700;letter-spacing:6px;font-variant-numeric:tabular-nums;color:var(--accent)}
+.copy-row{display:flex;gap:8px;align-items:center}
+.copy-row input{flex:1;font-size:13px}
 .pick{display:flex;flex-direction:column;gap:4px;max-height:280px;overflow:auto;border:1px solid var(--line);border-radius:8px;padding:6px}
 .pick label{display:flex;align-items:center;gap:10px;padding:6px 8px;border-radius:8px;cursor:pointer}
 .pick label:has(input:checked){background:var(--ok-bg)}
@@ -506,6 +511,11 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
           <button class="btn danger" id="btnClearAll">ลบข้อมูลทั้งหมด</button>
         </div>
       </div>
+    </div>
+    <div class="card" style="margin-top:20px">
+      <h2>แจ้งเตือน LINE</h2>
+      <p class="muted small" style="margin-top:0">ส่งเข้า LINE ส่วนตัวของ HR หรือกลุ่ม HR: มีคำขอลาใหม่ และสรุปการลงเวลาทุกวันเวลา 21:00 (ใครยังไม่สแกนออก ใครลงเวลาด้วยการเลือกชื่อ)</p>
+      <div id="lineBody"><div class="empty small">กำลังโหลด…</div></div>
     </div>
     <div class="card" style="margin-top:20px">
       <h2>การคำนวณค่าแรง</h2>
@@ -2117,7 +2127,7 @@ function showView(name) {
   if (name === 'reports') renderReports();
   if (name === 'leaves') renderLeaves();
   if (name === 'calendar') renderCalendar();
-  if (name === 'settings') { renderSettings(); renderUsers(); }
+  if (name === 'settings') { renderSettings(); renderUsers(); renderLine(); }
 }
 $('#nav').addEventListener('click', e => { const b = e.target.closest('button'); if (b) showView(b.dataset.view); });
 let tickDay = dayKey(Date.now());
@@ -2325,6 +2335,113 @@ const LOGIN_DOMAIN = '@att.local';
 const toLoginEmail = v => { v = v.trim().toLowerCase(); return v.includes('@') ? v : v + LOGIN_DOMAIN; };
 const loginName = email => (email || '').endsWith(LOGIN_DOMAIN) ? email.slice(0, -LOGIN_DOMAIN.length) : (email || '');
 const ROLE_LABEL = { hr: 'HR (ทุกเมนู)', kiosk: 'เครื่องสแกนอย่างเดียว' };
+/* ---------- LINE notifications (HR only; keys stay on the server, handled by the att-line edge function) ---------- */
+async function lineCall(body) {
+  const { data, error } = await sb.functions.invoke('att-line', { body });
+  if (error) { let msg = error.message; try { msg = (await error.context.json()).error || msg; } catch {} throw new Error(msg); }
+  return data;
+}
+let lineWatch = null;
+const copyBtn = (text, label = 'คัดลอก') => `<button type="button" class="btn sm" data-copy="${esc(text)}">${label}</button>`;
+async function renderLine(keepCode) {
+  const box = $('#lineBody');
+  let st;
+  try { st = await lineCall({ action: 'status' }); }
+  catch (e) { box.innerHTML = `<div class="empty small">โหลดสถานะ LINE ไม่สำเร็จ: ${esc(e.message)}</div>`; return; }
+  clearInterval(lineWatch); lineWatch = null;
+  if (!st.configured) {
+    box.innerHTML = `
+      <ol class="line-steps small">
+        <li>สมัคร <b>LINE Official Account</b> ฟรีที่ <a href="https://manager.line.biz" target="_blank" rel="noopener">manager.line.biz</a> แล้วไปที่ <b>ตั้งค่า → Messaging API → เปิดใช้งาน</b></li>
+        <li>ที่ <a href="https://developers.line.biz/console/" target="_blank" rel="noopener">LINE Developers</a> เลือก channel ของบอท:
+          แท็บ <b>Basic settings</b> → คัดลอก <b>Channel secret</b> ·
+          แท็บ <b>Messaging API</b> → <b>Channel access token</b> กด Issue แล้วคัดลอก</li>
+        <li>แท็บ <b>Messaging API</b> → <b>Webhook URL</b> ใส่ลิงก์นี้ แล้วเปิด <b>Use webhook</b>:
+          <div class="copy-row" style="margin-top:6px"><input type="text" readonly value="${esc(st.webhookUrl)}">${copyBtn(st.webhookUrl)}</div></li>
+        <li>ใน LINE OA Manager: ปิด <b>ข้อความตอบกลับอัตโนมัติ</b> · ถ้าจะส่งเข้ากลุ่ม เปิด <b>อนุญาตให้บอทเข้าร่วมแชทกลุ่ม</b></li>
+      </ol>
+      <form id="lineKeyForm" autocomplete="off">
+        <label class="f"><span>Channel secret</span><input type="password" id="lnSecret" required autocomplete="off" spellcheck="false"></label>
+        <label class="f"><span>Channel access token</span><input type="password" id="lnToken" required autocomplete="off" spellcheck="false"></label>
+        <button class="btn primary" type="submit" id="lnSave">บันทึกและตรวจสอบกับ LINE</button>
+      </form>
+      <p class="small muted">คีย์เก็บไว้ที่เซิร์ฟเวอร์เท่านั้น แอปบนเครื่องอ่านกลับไม่ได้</p>`;
+    return;
+  }
+  const addUrl = st.basicId ? `https://line.me/R/ti/p/${encodeURIComponent(st.basicId)}` : null;
+  const targets = st.targets || [];
+  box.innerHTML = `
+    <div class="row" style="margin-bottom:12px"><div class="grow"><b>บอท: ${esc(st.botName || '-')}</b> <span class="muted small">${esc(st.basicId || '')}</span></div>
+      <span class="badge b-ok">เชื่อมต่อแล้ว</span></div>
+    <h3>ห้องที่รับแจ้งเตือน (${targets.length})</h3>
+    <div class="list">${targets.length ? targets.map(t => `<div class="row"><div class="grow">${t.kind === 'user' ? '👤' : '👥'} ${esc(t.name || (t.kind === 'user' ? 'แชทส่วนตัว' : 'กลุ่ม'))}
+        <div class="small muted">${t.kind === 'user' ? 'แชทส่วนตัว' : 'กลุ่ม'} · เชื่อมเมื่อ ${new Date(t.created_at).toLocaleDateString('th-TH')}</div></div>
+        <button type="button" class="btn sm danger" data-lnremove="${esc(t.line_id)}">เลิกส่ง</button></div>`).join('')
+      : '<div class="empty small">ยังไม่มี — กด "เพิ่มห้องรับแจ้งเตือน" ด้านล่าง</div>'}</div>
+    <div id="lnCodeBox" style="margin-top:12px">${st.code ? lineCodeHtml(st.code, st.codeExpires, addUrl) : `<button type="button" class="btn primary" id="lnNewCode">เพิ่มห้องรับแจ้งเตือน</button>`}</div>
+    <h3>แจ้งเตือนอะไรบ้าง</h3>
+    <label class="check"><input type="checkbox" id="lnLeave" ${st.notifyLeave ? 'checked' : ''}><span>มีคำขอลาใหม่ (ทันที)</span></label>
+    <label class="check"><input type="checkbox" id="lnDaily" ${st.notifyDaily ? 'checked' : ''}><span>สรุปการลงเวลาประจำวัน เวลา 21:00 (ไม่ส่งวันที่ไม่มีใครมา)</span></label>
+    <div class="actions">
+      <button type="button" class="btn" id="lnTest">ส่งข้อความทดสอบ</button>
+      <button type="button" class="btn" id="lnSummary">ส่งสรุปวันนี้ตอนนี้</button>
+      <button type="button" class="btn danger" id="lnDisconnect">ยกเลิกการเชื่อมต่อบอท</button>
+    </div>
+    <details class="small muted" style="margin-top:10px"><summary>Webhook URL (สำหรับตั้งค่าใน LINE Developers)</summary>
+      <div class="copy-row" style="margin-top:6px"><input type="text" readonly value="${esc(st.webhookUrl)}">${copyBtn(st.webhookUrl)}</div></details>`;
+  if (st.code) watchForNewChat(targets.length);
+}
+function lineCodeHtml(code, expires, addUrl) {
+  return `<div class="note" style="margin:0">
+    <div>1) ${addUrl ? `เพิ่มบอทเป็นเพื่อน: <a href="${esc(addUrl)}" target="_blank" rel="noopener">${esc(addUrl)}</a> หรือ` : ''}เชิญบอทเข้ากลุ่ม LINE ของ HR</div>
+    <div style="margin-top:6px">2) พิมพ์ส่งในแชทนั้น:</div>
+    <div class="line-code">เชื่อม ${esc(code)}</div>
+    <div>รหัสใช้ได้ถึง ${hm(Date.parse(expires))} น. · ใช้ได้ครั้งเดียว · บอทจะตอบว่า "เชื่อมต่อสำเร็จ"</div></div>`;
+}
+function watchForNewChat(count) {
+  clearInterval(lineWatch);
+  lineWatch = setInterval(async () => {
+    if (currentView !== 'settings') { clearInterval(lineWatch); return; }
+    try { const st = await lineCall({ action: 'status' }); if ((st.targets || []).length !== count || !st.code) { toast('เชื่อมต่อ LINE เพิ่มแล้ว', 'ok'); renderLine(); } } catch {}
+  }, 5000);
+}
+$('#lineBody').addEventListener('click', async ev => {
+  const t = ev.target;
+  try {
+    if (t.closest('[data-copy]')) { await navigator.clipboard.writeText(t.closest('[data-copy]').dataset.copy); toast('คัดลอกแล้ว', 'ok'); return; }
+    if (t.id === 'lnNewCode') {
+      const st = await lineCall({ action: 'status' }), r = await lineCall({ action: 'code' });
+      $('#lnCodeBox').innerHTML = lineCodeHtml(r.code, r.expires, st.basicId ? `https://line.me/R/ti/p/${encodeURIComponent(st.basicId)}` : null);
+      watchForNewChat((st.targets || []).length);
+    }
+    if (t.closest('[data-lnremove]')) {
+      if (!confirm('เลิกส่งแจ้งเตือนไปที่ห้องนี้?')) return;
+      await lineCall({ action: 'remove', line_id: t.closest('[data-lnremove]').dataset.lnremove }); renderLine();
+    }
+    if (t.id === 'lnTest') { const r = await lineCall({ action: 'test' }); toast(r.sent ? `ส่งแล้ว ${r.sent} ห้อง` : 'ยังไม่มีห้องรับแจ้งเตือน', r.sent ? 'ok' : 'warn'); }
+    if (t.id === 'lnSummary') { const r = await lineCall({ action: 'summary-now' }); toast(r.empty ? 'วันนี้ยังไม่มีใครลงเวลา จึงไม่มีสรุป' : r.sent ? `ส่งสรุปแล้ว ${r.sent} ห้อง` : 'ยังไม่มีห้องรับแจ้งเตือน', r.sent ? 'ok' : 'warn'); }
+    if (t.id === 'lnDisconnect') {
+      if (!confirm('ยกเลิกการเชื่อมต่อบอท LINE? จะลบคีย์และห้องรับแจ้งเตือนทั้งหมด')) return;
+      await lineCall({ action: 'disconnect' }); toast('ยกเลิกการเชื่อมต่อแล้ว', 'ok'); renderLine();
+    }
+  } catch (e) { toast(e.message, 'err'); }
+});
+$('#lineBody').addEventListener('change', async ev => {
+  if (ev.target.id !== 'lnLeave' && ev.target.id !== 'lnDaily') return;
+  try { await lineCall({ action: 'options', notifyLeave: $('#lnLeave').checked, notifyDaily: $('#lnDaily').checked }); toast('บันทึกแล้ว', 'ok'); }
+  catch (e) { toast(e.message, 'err'); }
+});
+$('#lineBody').addEventListener('submit', async ev => {
+  if (ev.target.id !== 'lineKeyForm') return;
+  ev.preventDefault();
+  $('#lnSave').disabled = true;
+  try {
+    const r = await lineCall({ action: 'save', secret: $('#lnSecret').value, token: $('#lnToken').value });
+    toast(`เชื่อมต่อบอท ${r.botName || ''} แล้ว`, 'ok'); renderLine();
+  } catch (e) { toast(e.message, 'err'); $('#lnSave').disabled = false; }
+  finally { const a = $('#lnSecret'), b = $('#lnToken'); if (a) a.value = ''; if (b) b.value = ''; }
+});
+
 async function adminCall(body) {
   const { data, error } = await sb.functions.invoke('att-admin', { body });
   if (error) {
@@ -2452,6 +2569,8 @@ async function afterLogin(user) {
   $('#loading').style.display = 'none';
   renderKioskSide(); tick();
   if (!employees.length && currentRole === 'hr') toast('เริ่มต้นใช้งาน: ลงทะเบียนพนักงานที่เมนู "พนักงาน"', 'info');
+  // links in LINE messages end with #leaves: open the leave page straight away
+  if (location.hash === '#leaves' && currentRole === 'hr') { history.replaceState(null, '', location.pathname); currentView = 'kiosk'; showView('leaves'); return; }
   startKiosk();
 }
 $('#loginForm').addEventListener('submit', async ev => {
