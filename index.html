@@ -2544,7 +2544,7 @@ async function afterLogin(user) {
     role = mine.role;
   } else if (!data) {
     store.set('boot', null);
-    await sb.auth.signOut();
+    await sb.auth.signOut({ scope: 'local' });   // ออกเฉพาะเครื่องนี้ ไม่เตะเครื่องอื่นที่ใช้บัญชีเดียวกัน
     showLogin(`บัญชี ${loginName(user.email)} ยังไม่ได้รับสิทธิ์ใช้งาน กรุณาติดต่อ HR`);
     return;
   } else role = data.role;
@@ -2585,7 +2585,7 @@ $('#btnLogout').addEventListener('click', async () => {
   if (!outbox.length && !confirm('ออกจากระบบ? ต้องใส่ชื่อผู้ใช้และรหัสผ่านใหม่เพื่อเข้าใช้อีกครั้ง')) return;
   if (outbox.length && !confirm(`ยังมีข้อมูลลงเวลารอส่ง ${outbox.length} รายการ ถ้าออกจากระบบตอนนี้จะส่งเมื่อเข้าสู่ระบบครั้งถัดไป ต้องการออกจากระบบหรือไม่?`)) return;
   store.set('boot', null);
-  await sb.auth.signOut();
+  await sb.auth.signOut({ scope: 'local' });   // ออกเฉพาะเครื่องนี้ ไม่เตะเครื่องอื่นที่ใช้บัญชีเดียวกัน
   location.reload();
 });
 (async () => {
