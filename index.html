@@ -243,6 +243,7 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
       <span class="small muted" id="userEmail"></span>
       <span class="role-tag" id="roleTag"></span>
       <button class="btn sm" id="btnInstall" hidden>ติดตั้งแอป</button>
+      <a class="btn sm" id="btnHub" href="/office" hidden style="text-decoration:none">🏠 หน้ารวม</a>
       <button class="btn sm" id="btnLogout">ออกจากระบบ</button>
       <span class="clock-sm" id="clockSm"></span>
     </div>
@@ -2588,6 +2589,8 @@ $('#btnLogout').addEventListener('click', async () => {
   await sb.auth.signOut({ scope: 'local' });   // ออกเฉพาะเครื่องนี้ ไม่เตะเครื่องอื่นที่ใช้บัญชีเดียวกัน
   location.reload();
 });
+// เครื่องหลังบ้าน (เข้าระบบที่หน้า /office บนเว็บเดียวกัน) → ปุ่มกลับหน้ารวม · เครื่องสแกนหน้างานไม่เห็น
+try { $('#btnHub').hidden = !localStorage.getItem('wpd_auth_hub'); } catch {}
 (async () => {
   try {
     const { data: { session } } = await sb.auth.getSession();
