@@ -1517,7 +1517,7 @@ function showResult(emp, res) {
     $('#kResSub').innerHTML = `${typ} ${hm(ev.time)} น. ${badge}`;
     setStatus(st, 'ok', ev.type === 'lunch' ? '✓ บันทึก OT เที่ยงสำเร็จ' : `✓ บันทึกเวลา${typ}สำเร็จ`);
     beep(true);
-    speak(ev.type === 'in' ? `สวัสดีค่ะ คุณ${emp.name}${res.pick ? ' เลือกหน้างานด้วยค่ะ' : ''}` : ev.type === 'lunch' ? `บันทึกโอทีเที่ยง คุณ${emp.name}` : `ขอบคุณค่ะ คุณ${emp.name} เดินทางปลอดภัยนะคะ`);
+    speak(ev.type === 'in' ? `สวัสดีค่ะ คุณ${emp.name}${res.pick ? ' กรุณาเลือกหน้างานของตัวเองด้วยค่ะ' : ''}` : ev.type === 'lunch' ? `บันทึกโอทีเที่ยง คุณ${emp.name}` : `ขอบคุณค่ะ คุณ${emp.name} เดินทางปลอดภัยนะคะ`);
     renderKioskSide();
   }
   $('#kResult').classList.add('show');
