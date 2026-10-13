@@ -87,6 +87,8 @@ main{max-width:1280px;margin:0 auto;padding:20px 16px 48px}
 .result .stations{display:none;flex-wrap:wrap;gap:8px;margin-top:10px;max-width:440px}
 .result .stations.show{display:flex}
 .result .stations .lbl{width:100%;font-size:13px;color:var(--muted)}
+.result .stations .lbl.need{font-size:17px;font-weight:700;color:#c62828}
+.result .stations button .prev{display:block;font-size:11px;font-weight:400;color:var(--muted)}
 .result .stations button{min-width:86px;min-height:64px;border-radius:12px;border:2px solid var(--line,#d6dbe1);background:var(--surface-2);color:var(--text);font-weight:600;font-size:15px;font-family:inherit;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:6px 10px}
 .result .stations button .ic{font-size:26px;line-height:1}
 .result .stations button.on{border-color:var(--accent,#2bb39f);box-shadow:0 0 0 2px var(--accent,#2bb39f) inset}
@@ -664,7 +666,7 @@ const DEFAULTS = {
   workDays: [1, 2, 3, 4, 5, 6], leaveQuota: { sick: 30, personal: 3, vacation: 6 }, lunchStart: '12:00', lunchEnd: '13:00', lunchScan: true, otAfter: 30, otRound: 30, halfDayHours: 5,
   payroll: { hoursPerDay: 8, otMult: 1.5, holidayMult: 2, holidayOtMult: 3, payLeave: true, sso: true, ssoRate: 5, ssoMinBase: 1650, ssoMaxBase: 17500 },
   // หน้างานที่ให้เลือกตอนสแกนเข้างาน (ใช้แบ่งค่าแรงลงต้นทุนในแอพต้นทุน)
-  stationPick: true, stationWait: 8,
+  stationPick: true, stationWait: 15,
   stations: [{ id: 'cut', icon: '✂️', name: 'ตัดผ้า' }, { id: 'line', icon: '🏭', name: 'ไลน์' }, { id: 'picnic', icon: '🧺', name: 'แพ็คปิกนิก' }, { id: 'other', icon: '📦', name: 'อื่นๆ' }]
 };
 let employees = [];
@@ -1047,20 +1049,25 @@ function recordEvent(emp, { score = null, live = false, source = 'face', snap = 
   }
   const ev = { id: uid(), empId: emp.id, time: now, type, score, live, source, snap };
   const pick = type === 'in' && settings.stationPick && (settings.stations || []).length > 0;
-  if (pick) ev.station = lastStation(emp.id);
+  /* ต้องแตะเลือกเอง — ไม่เลือกไว้ให้ (เคยเลือกไว้ให้ พนักงานไม่แตะ ค่าแรงลง "อื่นๆ" หมด) */
+  const suggest = pick ? lastStation(emp.id, true) : null;
+  if (pick) ev.station = null;
   events.push(ev);
   // keep snapshots only for the latest 300 events to save browser storage
   let withSnap = 0;
   for (let i = events.length - 1; i >= 0; i--) if (events[i].snap && ++withSnap > 300) events[i].snap = null;
-  pushEvent(ev, pick ? ((+settings.stationWait || 8) + 30) * 1000 : 0);
-  return { ev, pick };
+  pushEvent(ev, pick ? (stationWait() + 30) * 1000 : 0);
+  return { ev, pick, suggest };
 }
 /* หน้างานล่าสุดที่คนนี้เคยเลือก — ไม่เคย = "อื่นๆ" (หรือหน้างานแรกในรายการ) */
-function lastStation(empId) {
+function lastStation(empId, onlyReal) {
   const st = settings.stations || [];
   const prev = events.filter(e => e.empId === empId && e.station && st.some(x => x.id === e.station)).sort((a, b) => a.time - b.time).pop();
+  if (onlyReal) return prev ? prev.station : null;
   return prev ? prev.station : ((st.find(x => x.id === 'other') || st[0] || {}).id || null);
 }
+/* รอเลือกหน้างานนานสุดกี่วินาที (ระหว่างนี้ไม่สแกนคนถัดไป) */
+const stationWait = () => Math.min(30, Math.max(10, +settings.stationWait || 15));
 const stationLabel = id => { const x = (settings.stations || []).find(s => s.id === id); return x ? `${x.icon} ${x.name}` : (id || '-'); };
 const TYPE_LABEL = { in: 'เข้างาน', out: 'ออกงาน', lunch: 'OT เที่ยง' };
 const MIN_OUT_AFTER_IN = 30; // minutes: scanning again sooner than this after checking in is treated as a repeat
@@ -1457,19 +1464,25 @@ function commitStation(station) {
   releaseHeld(p.ev.id, p.ev.station);
   $('#kStations').classList.remove('show'); $('#kStations').innerHTML = '';
 }
-function showStationPicker(emp, ev) {
-  const box = $('#kStations'), wait = (+settings.stationWait || 8);
+function showStationPicker(emp, ev, suggest) {
+  const box = $('#kStations'), wait = stationWait();
   stationPending = { ev };
   const draw = left => {
-    box.innerHTML = `<div class="lbl">วันนี้อยู่หน้างานไหน? แตะ 1 ครั้ง (ไม่แตะใน ${left} วิ = ${esc(stationLabel(ev.station))})</div>` +
-      (settings.stations || []).map(x => `<button type="button" data-st="${esc(x.id)}" class="${x.id === ev.station ? 'on' : ''}"><span class="ic">${esc(x.icon)}</span>${esc(x.name)}</button>`).join('');
+    box.innerHTML = `<div class="lbl need">👆 แตะเลือกหน้างานวันนี้ก่อน (เหลือ ${left} วิ)</div>` +
+      (settings.stations || []).map(x => `<button type="button" data-st="${esc(x.id)}" class="${x.id === suggest ? 'on' : ''}"><span class="ic">${esc(x.icon)}</span>${esc(x.name)}${x.id === suggest ? '<span class="prev">ครั้งก่อน</span>' : ''}</button>`).join('');
   };
   let left = wait; draw(left); box.classList.add('show');
   clearTimeout(stationTimer);
   const tick = () => {
     if (!stationPending || stationPending.ev !== ev) return;
     left--;
-    if (left <= 0) { commitStation(); $('#kResult').classList.remove('show'); return; }
+    if (left <= 0) {   /* ไม่แตะ — เวลาเข้างานยังบันทึก แต่ไม่ระบุหน้างาน (HR แก้ได้ที่หน้ารายงาน) */
+      commitStation(null);
+      setStatus($('#kStatus'), 'warn', '⚠ ไม่ได้เลือกหน้างาน — บันทึกเวลาแล้ว แจ้งหัวหน้าให้แก้หน้างาน');
+      beep(false); pauseUntil = Date.now() + 600;
+      clearTimeout(resultTimer); resultTimer = setTimeout(() => $('#kResult').classList.remove('show'), 2500);
+      return;
+    }
     draw(left); stationTimer = setTimeout(tick, 1000);
   };
   stationTimer = setTimeout(tick, 1000);
@@ -1504,12 +1517,13 @@ function showResult(emp, res) {
     $('#kResSub').innerHTML = `${typ} ${hm(ev.time)} น. ${badge}`;
     setStatus(st, 'ok', ev.type === 'lunch' ? '✓ บันทึก OT เที่ยงสำเร็จ' : `✓ บันทึกเวลา${typ}สำเร็จ`);
     beep(true);
-    speak(ev.type === 'in' ? `สวัสดีค่ะ คุณ${emp.name}` : ev.type === 'lunch' ? `บันทึกโอทีเที่ยง คุณ${emp.name}` : `ขอบคุณค่ะ คุณ${emp.name} เดินทางปลอดภัยนะคะ`);
+    speak(ev.type === 'in' ? `สวัสดีค่ะ คุณ${emp.name}${res.pick ? ' เลือกหน้างานด้วยค่ะ' : ''}` : ev.type === 'lunch' ? `บันทึกโอทีเที่ยง คุณ${emp.name}` : `ขอบคุณค่ะ คุณ${emp.name} เดินทางปลอดภัยนะคะ`);
     renderKioskSide();
   }
   $('#kResult').classList.add('show');
   clearTimeout(resultTimer);
-  if (res.pick && res.ev) { showStationPicker(emp, res.ev); pauseUntil = Date.now() + 1500; return; }
+  /* เข้างาน: ต้องเลือกหน้างานก่อน — ไม่สแกนคนถัดไปจนกว่าจะเลือก (หรือครบเวลา) */
+  if (res.pick && res.ev) { showStationPicker(emp, res.ev, res.suggest); pauseUntil = Date.now() + (stationWait() + 1) * 1000; return; }
   resultTimer = setTimeout(() => $('#kResult').classList.remove('show'), 3000);
 }
 function renderKioskSide() {
