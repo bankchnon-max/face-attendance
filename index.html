@@ -2424,11 +2424,15 @@ async function renderLine(keepCode) {
     <h3>แจ้งเตือนอะไรบ้าง</h3>
     <label class="check"><input type="checkbox" id="lnLeave" ${st.notifyLeave ? 'checked' : ''}><span>มีคำขอลาใหม่ (ทันที)</span></label>
     <label class="check"><input type="checkbox" id="lnDaily" ${st.notifyDaily ? 'checked' : ''}><span>สรุปการลงเวลาประจำวัน เวลา 21:00 (ไม่ส่งวันที่ไม่มีใครมา)</span></label>
+    <label class="check"><input type="checkbox" id="lnStock" ${st.notifyStock !== false ? 'checked' : ''}><span>สต๊อกใย ผ้า ถุง ปลอก ใกล้หมด ทุกวัน 08:00 (ไม่ส่งวันที่ไม่มีอะไรใกล้หมด)</span></label>
     <div class="actions">
       <button type="button" class="btn" id="lnTest">ส่งข้อความทดสอบ</button>
       <button type="button" class="btn" id="lnSummary">ส่งสรุปวันนี้ตอนนี้</button>
+      <button type="button" class="btn" id="lnStockPreview">ดูตัวอย่างสต๊อกใกล้หมด</button>
+      <button type="button" class="btn" id="lnStockNow">ส่งเช็คสต๊อกตอนนี้</button>
       <button type="button" class="btn danger" id="lnDisconnect">ยกเลิกการเชื่อมต่อบอท</button>
     </div>
+    <pre id="lnStockOut" class="note small" style="display:none;white-space:pre-wrap;margin:10px 0 0;font:inherit"></pre>
     <details class="small muted" style="margin-top:10px"><summary>Webhook URL (สำหรับตั้งค่าใน LINE Developers)</summary>
       <div class="copy-row" style="margin-top:6px"><input type="text" readonly value="${esc(st.webhookUrl)}">${copyBtn(st.webhookUrl)}</div></details>`;
   if (st.code) watchForNewChat(targets.length);
@@ -2462,6 +2466,11 @@ $('#lineBody').addEventListener('click', async ev => {
     }
     if (t.id === 'lnTest') { const r = await lineCall({ action: 'test' }); toast(r.sent ? `ส่งแล้ว ${r.sent} ห้อง` : 'ยังไม่มีห้องรับแจ้งเตือน', r.sent ? 'ok' : 'warn'); }
     if (t.id === 'lnSummary') { const r = await lineCall({ action: 'summary-now' }); toast(r.empty ? 'วันนี้ยังไม่มีใครลงเวลา จึงไม่มีสรุป' : r.sent ? `ส่งสรุปแล้ว ${r.sent} ห้อง` : 'ยังไม่มีห้องรับแจ้งเตือน', r.sent ? 'ok' : 'warn'); }
+    if (t.id === 'lnStockPreview') {
+      const r = await lineCall({ action: 'stock-preview' }), out = $('#lnStockOut');
+      out.textContent = r.text || '✅ ตอนนี้ไม่มีของใกล้หมด (วันนี้จะไม่ส่งแจ้งเตือน)'; out.style.display = '';
+    }
+    if (t.id === 'lnStockNow') { const r = await lineCall({ action: 'stock-now' }); toast(r.empty ? 'ตอนนี้ไม่มีของใกล้หมด จึงไม่ได้ส่ง' : r.sent ? `ส่งเช็คสต๊อกแล้ว ${r.sent} ห้อง` : 'ยังไม่มีห้องรับแจ้งเตือน', r.sent ? 'ok' : 'warn'); }
     if (t.id === 'lnDisconnect') {
       if (!confirm('ยกเลิกการเชื่อมต่อบอท LINE? จะลบคีย์และห้องรับแจ้งเตือนทั้งหมด')) return;
       await lineCall({ action: 'disconnect' }); toast('ยกเลิกการเชื่อมต่อแล้ว', 'ok'); renderLine();
@@ -2469,8 +2478,8 @@ $('#lineBody').addEventListener('click', async ev => {
   } catch (e) { toast(e.message, 'err'); }
 });
 $('#lineBody').addEventListener('change', async ev => {
-  if (ev.target.id !== 'lnLeave' && ev.target.id !== 'lnDaily') return;
-  try { await lineCall({ action: 'options', notifyLeave: $('#lnLeave').checked, notifyDaily: $('#lnDaily').checked }); toast('บันทึกแล้ว', 'ok'); }
+  if (!['lnLeave', 'lnDaily', 'lnStock'].includes(ev.target.id)) return;
+  try { await lineCall({ action: 'options', notifyLeave: $('#lnLeave').checked, notifyDaily: $('#lnDaily').checked, notifyStock: $('#lnStock').checked }); toast('บันทึกแล้ว', 'ok'); }
   catch (e) { toast(e.message, 'err'); }
 });
 $('#lineBody').addEventListener('submit', async ev => {

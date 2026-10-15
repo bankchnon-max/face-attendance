@@ -1,7 +1,7 @@
 // att-line: LINE notifications for HR.
 // Three kinds of callers, each authenticated differently (so the function is deployed without JWT checks):
 //   1. LINE webhook (x-line-signature)  -> link a chat with a one-time code, forget chats that remove the bot
-//   2. the database (x-internal-secret) -> new leave request, daily summary
+//   2. the database (x-internal-secret) -> new leave request, daily summary, low stock (stock app data)
 //   3. HR in the app (user JWT, role hr) -> save bot keys, get a link code, list/remove chats, test
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
@@ -22,7 +22,7 @@ const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE
 
 type Config = {
   channel_secret: string | null; channel_token: string | null; bot_name: string | null; bot_basic_id: string | null;
-  link_code: string | null; link_code_expires: string | null; notify_leave: boolean; notify_daily: boolean; internal_secret: string;
+  link_code: string | null; link_code_expires: string | null; notify_leave: boolean; notify_daily: boolean; notify_stock: boolean; internal_secret: string;
 };
 async function getConfig(): Promise<Config> {
   const { data, error } = await admin.from('att_line_config').select('*').eq('id', 1).single();
@@ -123,6 +123,98 @@ async function dailyMessage() {
   ].filter((x, i, a) => x !== '' || i === a.length - 2).join('\n');
 }
 
+/* ---------- สต๊อกใกล้หมด (ข้อมูลแอพสต๊อก + แอพผลิตใน kv_store) ----------
+   เกณฑ์เดียวกับตาราง "⚠ ใกล้หมด" ในแอพสต๊อก:
+   ใย = ต่ำกว่าจุดเตือนที่ตั้งไว้ · ผ้า = ม้วนที่ยังใช้ได้ ≤ 2 · ถุงซิล/ถุงแพ็ค = เหลือ < 5 กก. · ปลอกพร้อมผลิต = ต่ำกว่าจุดเตือนของประเภทสินค้า */
+const STOCK_URL = 'https://production.winpolydesign.com/stock-app_1';
+const r2 = (n: number) => Math.round(n * 100) / 100;
+// deno-lint-ignore no-explicit-any
+type Any = any;
+async function kvJson(id: string): Promise<Any> {
+  const { data } = await admin.from('kv_store').select('value').eq('id', id).maybeSingle();
+  try { return data?.value ? JSON.parse(data.value) : {}; } catch { return {}; }
+}
+/* v3_feed ถูกแบ่งเก็บรายวัน (v3_feed~YYYY-MM-DD ตามสารบัญ v3_feed~idx) — รวมกลับเฉพาะส่วนที่ต้องใช้ */
+async function feedLists(): Promise<{ wd: Any[]; bagWd: Any[]; fabricWd: Any[] }> {
+  const out = { wd: [] as Any[], bagWd: [] as Any[], fabricWd: [] as Any[] };
+  const idx = await kvJson('v3_feed~idx');
+  const days = Object.keys(idx.days || {});
+  const parts: Any[] = [];
+  if (!days.length) parts.push(await kvJson('v3_feed'));
+  for (let i = 0; i < days.length; i += 60) {
+    const { data } = await admin.from('kv_store').select('value').in('id', days.slice(i, i + 60).map((d) => 'v3_feed~' + d));
+    (data ?? []).forEach((r) => { try { parts.push(JSON.parse(r.value)); } catch { /* ข้ามก้อนเสีย */ } });
+  }
+  for (const p of parts) { out.wd.push(...(p.wd || [])); out.bagWd.push(...(p.bagWd || [])); out.fabricWd.push(...(p.fabricWd || [])); }
+  return out;
+}
+function pieceLayout(widthIn: number, sizeStr: string) {
+  const raw = String(sizeStr || ''), m = raw.match(/(\d+\.?\d*)\s*[xX×*]\s*(\d+\.?\d*)/);
+  if (!m) return null;
+  const k = /(ซม|เซน|\bcm\b)/i.test(raw) ? 2.54 : 1;
+  let w = +m[1] / k, h = +m[2] / k;
+  if (!w || !h) return null;
+  if (widthIn && w > widthIn && h <= widthIn) { const t = w; w = h; h = t; }
+  return { across: Math.max(1, widthIn ? Math.floor(widthIn / w) : 1), along: h };
+}
+function availableRolls(receipts: Any[], cuts: Any[], type: string, cutBatches: Any[]) {
+  const mine = cuts.filter((c) => c.fabricType === type);
+  const usedIds = new Set(mine.filter((c) => c.rollId).map((c) => c.rollId)), usedNos = new Set(mine.filter((c) => !c.rollId).map((c) => c.rollNo));
+  return receipts.filter((r) => {
+    if (r.fabricType !== type || r.retired) return false;
+    if (!usedIds.has(r.id) && !usedNos.has(r.rollNo)) return true;
+    if (!(r.widthIn && r.lengthIn)) return false;
+    let used = 0;
+    cutBatches.filter((b) => b.rollId ? b.rollId === r.id : (b.fabricType === r.fabricType && b.rollNo === r.rollNo)).forEach((b) => {
+      const L = pieceLayout(r.widthIn, b.size); if (L) used += Math.ceil(b.qtyCut / L.across) * L.along; });
+    return Math.max(0, r.lengthIn - used) >= 1;
+  });
+}
+async function stockMessage(): Promise<string | null> {
+  const [fib, fab, bag, feed] = await Promise.all([kvJson('v3s_fiber'), kvJson('v3s_fabric'), kvJson('v3s_bag'), feedLists()]);
+  const lines: string[] = [];
+  // ใย
+  const th = fib.th || {}, rec: Record<string, number> = {}, used: Record<string, number> = {};
+  (fib.receipts || []).forEach((r: Any) => { rec[r.fiberName] = (rec[r.fiberName] || 0) + (+r.kg || 0); });
+  feed.wd.forEach((w: Any) => { used[w.fiberName] = (used[w.fiberName] || 0) + (+w.kg || 0); });
+  const fiberLow = Object.keys(th).filter((n) => +th[n] > 0 && r2((rec[n] || 0) - (used[n] || 0)) < +th[n])
+    .map((n) => `• ${n} เหลือ ${r2((rec[n] || 0) - (used[n] || 0)).toLocaleString('en-US')} กก. (เตือนต่ำกว่า ${(+th[n]).toLocaleString('en-US')})`);
+  if (fiberLow.length) lines.push('🧶 ใย', ...fiberLow);
+  // ผ้า
+  const fr: Any[] = fab.receipts || [], cuts: Any[] = fab.cuts || [], cb: Any[] = fab.cutBatches || [];
+  const fabLow = [...new Set(fr.map((r) => r.fabricType))].map((t) => ({ t, n: availableRolls(fr, cuts, t, cb).length }))
+    .filter((x) => x.n <= 2).map((x) => `• ${x.t} เหลือ ${x.n} ม้วน`);
+  if (fabLow.length) lines.push('🧵 ผ้า', ...fabLow);
+  // ถุง
+  const wdBySack: Record<string, number> = {};
+  feed.bagWd.forEach((w: Any) => (w.picks || []).forEach((p: Any) => { wdBySack[p.sackId] = (wdBySack[p.sackId] || 0) + (+p.kg || 0); }));
+  const agg: Record<string, { kind: string; name: string; kg: number; pcs: number }> = {};
+  (bag.receipts || []).forEach((s: Any) => {
+    const k = s.kind + '|' + s.name, left = (+s.sackWeightKg || 0) - (wdBySack[s.id] || 0);
+    const a = agg[k] || (agg[k] = { kind: s.kind, name: s.name, kg: 0, pcs: 0 });
+    a.kg += left; if (+s.weightPerBag > 0) a.pcs += Math.round(Math.max(0, left) / +s.weightPerBag);
+  });
+  for (const [kind, label] of [['zip', '🛍️ ถุงซิล'], ['pack', '📦 ถุงแพ็ค']]) {
+    const low = Object.values(agg).filter((a) => a.kind === kind && r2(a.kg) < 5)
+      .map((a) => `• ${a.name} เหลือ ${r2(Math.max(0, a.kg))} กก.${a.pcs ? ` (~${a.pcs.toLocaleString('en-US')} ใบ)` : ''}`);
+    if (low.length) lines.push(label, ...low);
+  }
+  // ปลอกพร้อมผลิต ตามประเภทสินค้า (รับกลับจากช่าง − เบิกไปผลิต)
+  const pth = fab.prodTypeTh || {};
+  if (Object.keys(pth).some((t) => +pth[t] > 0)) {
+    const ret: Record<string, number> = {}, wd: Record<string, number> = {}, pt: Record<string, string> = {};
+    (fab.sewReturns || []).forEach((r: Any) => { ret[r.batchId] = (ret[r.batchId] || 0) + (+r.qty || 0); if (r.productType) pt[r.batchId] = r.productType; });
+    feed.fabricWd.forEach((w: Any) => (w.picks || []).forEach((p: Any) => { wd[p.batchId] = (wd[p.batchId] || 0) + (+p.qty || 0); }));
+    const ready: Record<string, number> = {};
+    cb.forEach((b: Any) => { const t = pt[b.id], left = (ret[b.id] || 0) - (wd[b.id] || 0); if (t && left > 0) ready[t] = (ready[t] || 0) + left; });
+    const low = Object.keys(pth).filter((t) => +pth[t] > 0 && (ready[t] || 0) < +pth[t])
+      .map((t) => `• ${t} เหลือ ${r2(ready[t] || 0).toLocaleString('en-US')} ใบ (เตือนต่ำกว่า ${(+pth[t]).toLocaleString('en-US')})`);
+    if (low.length) lines.push('🧺 ปลอกพร้อมผลิต', ...low);
+  }
+  if (!lines.length) return null;
+  return [`⚠️ สต๊อกใกล้หมด · ${thDate(bkk(new Date()).key)}`, ...lines, '', `ดูในแอพสต๊อก: ${STOCK_URL}`].join('\n');
+}
+
 /* ---------- 1. LINE webhook ---------- */
 async function handleWebhook(raw: string, signature: string) {
   const cfg = await getConfig();
@@ -162,6 +254,7 @@ async function handleInternal(secret: string, body: Record<string, unknown>) {
   let text: string | null = null;
   if (body.type === 'leave' && cfg.notify_leave) text = await leaveMessage(String(body.id));
   if (body.type === 'daily' && cfg.notify_daily) text = await dailyMessage();
+  if (body.type === 'stock' && cfg.notify_stock) text = await stockMessage();
   if (!text) return json({ skipped: true });
   return json({ sent: await pushAll(cfg, text) });
 }
@@ -180,7 +273,7 @@ async function handleHr(token: string, body: Record<string, unknown>) {
       const codeLive = cfg.link_code && cfg.link_code_expires && new Date(cfg.link_code_expires) > new Date();
       return json({
         configured: !!cfg.channel_token, botName: cfg.bot_name, basicId: cfg.bot_basic_id, webhookUrl: WEBHOOK_URL,
-        notifyLeave: cfg.notify_leave, notifyDaily: cfg.notify_daily, targets: targets ?? [],
+        notifyLeave: cfg.notify_leave, notifyDaily: cfg.notify_daily, notifyStock: cfg.notify_stock, targets: targets ?? [],
         code: codeLive ? cfg.link_code : null, codeExpires: codeLive ? cfg.link_code_expires : null,
       });
     }
@@ -201,7 +294,7 @@ async function handleHr(token: string, body: Record<string, unknown>) {
       return json({ code, expires });
     }
     case 'options': {
-      await setConfig({ notify_leave: !!body.notifyLeave, notify_daily: !!body.notifyDaily });
+      await setConfig({ notify_leave: !!body.notifyLeave, notify_daily: !!body.notifyDaily, ...(body.notifyStock === undefined ? {} : { notify_stock: !!body.notifyStock }) });
       return json({ ok: true });
     }
     case 'remove': {
@@ -216,6 +309,14 @@ async function handleHr(token: string, body: Record<string, unknown>) {
     case 'summary-now': {
       if (!cfg.channel_token) return fail('ยังไม่ได้ตั้งค่าบอท LINE');
       const text = await dailyMessage();
+      return json({ sent: text ? await pushAll(cfg, text) : 0, empty: !text });
+    }
+    case 'stock-preview': {
+      return json({ text: await stockMessage() });
+    }
+    case 'stock-now': {
+      if (!cfg.channel_token) return fail('ยังไม่ได้ตั้งค่าบอท LINE');
+      const text = await stockMessage();
       return json({ sent: text ? await pushAll(cfg, text) : 0, empty: !text });
     }
     case 'disconnect': {
