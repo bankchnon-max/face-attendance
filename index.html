@@ -1098,7 +1098,8 @@ function stationCostsRange(from, to) {
       for (const x of parts) {
         for (const map of [rows, mine]) { add(map, x.st, 'days', sd.dayValue * x.share); add(map, x.st, 'min', x.min); add(map, x.st, 'pay', dayPay * x.share); }
       }
-      for (const map of [rows, mine]) { add(map, last, 'pay', otPay); add(map, last, 'min', sd.otMin + sd.lunchMin); }
+      // evening OT time is already inside the station minutes (scan-in to scan-out); lunch OT is not
+      for (const map of [rows, mine]) { add(map, last, 'pay', otPay); add(map, last, 'min', sd.lunchMin); }
     }
     for (const [st, r] of mine) detail.push({ emp, st, ...r, pay: baht(r.pay) });
   }
@@ -1884,11 +1885,12 @@ function renderReports() {
 function stationCell(emp, key) {
   const inEv = events.filter(x => x.empId === emp.id && x.type === 'in' && dayKey(x.time) === key).sort((a, b) => a.time - b.time)[0];
   if (!inEv) return '-';
-  const sel = ev => `<select data-stev="${ev.id}" style="min-width:120px"><option value=""${ev.station ? '' : ' selected'}>— ไม่ระบุ —</option>${(settings.stations || []).map(x => `<option value="${esc(x.id)}"${x.id === ev.station ? ' selected' : ''}>${esc(x.icon)} ${esc(x.name)}</option>`).join('')}</select>`;
+  const sel = ev => `<select data-stev="${ev.id}" style="min-width:130px;width:auto"><option value=""${ev.station ? '' : ' selected'}>— ไม่ระบุ —</option>${(settings.stations || []).map(x => `<option value="${esc(x.id)}"${x.id === ev.station ? ' selected' : ''}>${esc(x.icon)} ${esc(x.name)}</option>`).join('')}</select>`;
   const moves = events.filter(x => x.empId === emp.id && x.type === 'move' && dayKey(x.time) === key && x.time > inEv.time).sort((a, b) => a.time - b.time);
   if (!moves.length) return sel(inEv);
   const { parts } = stationSplit(emp, key);
-  return `<div>${hm(inEv.time)} ${sel(inEv)}</div>${moves.map(m => `<div style="margin-top:4px">→ ${hm(m.time)} ${sel(m)}</div>`).join('')}
+  const line = (lbl, ev, top) => `<div style="display:flex;align-items:center;gap:6px;white-space:nowrap${top ? ';margin-top:4px' : ''}"><span style="min-width:52px">${lbl}</span>${sel(ev)}</div>`;
+  return `${line(hm(inEv.time), inEv)}${moves.map(m => line('→ ' + hm(m.time), m, true)).join('')}
     <div class="small muted" style="margin-top:4px">${parts.map(x => `${esc(stationName(x.st))} ${fmtMin(x.min)}`).join(' · ')}</div>`;
 }
 $('#rBody').addEventListener('change', async e => {
