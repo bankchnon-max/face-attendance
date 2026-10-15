@@ -174,6 +174,8 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 .paint .btn.active{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
 .lunch-banner{margin-top:12px;padding:10px 14px;border-radius:10px;background:var(--info-bg);color:var(--info);display:none;align-items:center;gap:10px;flex-wrap:wrap}
 .lunch-banner.show{display:flex}
+.lunch-banner.out{background:var(--warn-bg,#fff4e0);color:var(--warn,#b26a00)}
+#btnOutNow.on{background:var(--warn,#e08a00);color:#fff;border-color:transparent}
 .lunch-banner b{flex:1}
 body.role-kiosk #nav button:not([data-view="kiosk"]){display:none}
 .role-tag{font-size:12px;font-weight:600;padding:2px 10px;border-radius:99px;background:var(--surface-2);color:var(--muted);white-space:nowrap}
@@ -280,11 +282,16 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
           </div>
         </div>
         <div class="status idle" id="kStatus">มองกล้องเพื่อลงเวลา</div>
+        <div class="lunch-banner out" id="outBanner">
+          <b id="outText"></b>
+          <button class="btn sm" id="btnOutCancel">ยกเลิก</button>
+        </div>
         <div class="lunch-banner" id="lunchBanner">
           <b id="lunchText"></b>
           <button class="btn sm" id="btnLunchMode"></button>
         </div>
         <div class="actions">
+          <button class="btn" id="btnOutNow">🏠 เลิกงาน (กลับก่อน)</button>
           <button class="btn primary" id="btnLeave">ขอลา</button>
           <button class="btn" id="btnManual">สแกนไม่ผ่าน? ลงเวลาด้วยการเลือกชื่อ</button>
           <button class="btn" id="btnFull">เต็มจอ</button>
@@ -1033,6 +1040,18 @@ function monthCalendarInfo(month) {
 // Kiosk: during the lunch window a scan from someone already checked in counts as lunch OT,
 // unless the kiosk was switched to "check-out" mode for people going home at noon.
 let lunchOutMode = false;
+/* ปุ่ม "เลิกงาน (กลับก่อน)": สแกนครั้งถัดไปภายใน 60 วิ = ออกงาน ไม่ว่าช่วงไหน (ทำงานไม่เต็มวัน / กลับตอนเที่ยง) */
+let outUntil = 0, outTimer = null;
+const outMode = () => outUntil > Date.now();
+const idleText = () => outMode() ? '🏠 โหมดเลิกงาน — มองกล้องเพื่อลงเวลากลับบ้าน' : 'มองกล้องเพื่อลงเวลา';
+function renderOutMode() {
+  const on = outMode();
+  $('#outBanner').classList.toggle('show', on); $('#btnOutNow').classList.toggle('on', on);
+  if (on) $('#outText').textContent = '🏠 โหมดเลิกงาน: สแกนหน้าเพื่อลงเวลากลับบ้าน (เหลือ ' + Math.ceil((outUntil - Date.now()) / 1000) + ' วิ)';
+  clearTimeout(outTimer); if (on) outTimer = setTimeout(renderOutMode, 1000);
+  else if (/โหมดเลิกงาน/.test($('#kStatus').textContent)) setStatus($('#kStatus'), 'idle', idleText());
+}
+function setOutMode(on) { outUntil = on ? Date.now() + 60000 : 0; renderOutMode(); if (on) setStatus($('#kStatus'), 'warn', idleText()); }
 function recordEvent(emp, { score = null, live = false, source = 'face', snap = null }) {
   const now = Date.now(), today = dayKey(now);
   const mine = events.filter(e => e.empId === emp.id);
@@ -1041,8 +1060,10 @@ function recordEvent(emp, { score = null, live = false, source = 'face', snap = 
   const todays = mine.filter(e => dayKey(e.time) === today);
   let type = todays.some(e => e.type === 'in') ? 'out' : 'in';
   const lastToday = todays[todays.length - 1];
-  if (type === 'out' && lastToday?.type === 'in' && now - lastToday.time < MIN_OUT_AFTER_IN * 60000) return { dup: true, last: lastToday };
-  if (type === 'out' && settings.lunchScan && !lunchOutMode && inLunchWindow(now)) {
+  const forceOut = outMode();
+  if (forceOut) { setOutMode(false); if (type !== 'out') return { noIn: true }; }   /* กดเลิกงานแต่วันนี้ยังไม่ได้สแกนเข้า */
+  if (!forceOut && type === 'out' && lastToday?.type === 'in' && now - lastToday.time < MIN_OUT_AFTER_IN * 60000) return { dup: true, last: lastToday };
+  if (!forceOut && type === 'out' && settings.lunchScan && !lunchOutMode && inLunchWindow(now)) {
     const prev = todays.find(e => e.type === 'lunch');
     if (prev) return { dup: true, last: prev };
     type = 'lunch';
@@ -1081,6 +1102,8 @@ function renderLunchBanner() {
   $('#btnLunchMode').textContent = lunchOutMode ? 'กลับไปโหมด OT เที่ยง' : 'สแกนออกงานกลับบ้าน';
 }
 $('#btnLunchMode').addEventListener('click', () => { lunchOutMode = !lunchOutMode; renderLunchBanner(); });
+$('#btnOutNow').addEventListener('click', () => setOutMode(!outMode()));
+$('#btnOutCancel').addEventListener('click', () => setOutMode(false));
 
 /* ---------- face engine ---------- */
 let matcher = null, stream = null;
@@ -1257,7 +1280,7 @@ function startKiosk(retry = false) {
     if (!ok) { setStatus($('#kStatus'), 'err', 'กล้องไม่พร้อมใช้งาน — ระบบจะลองเปิดใหม่อัตโนมัติ'); return; }
     if (!ai) return;
     kioskOn = true;
-    setStatus($('#kStatus'), 'idle', 'มองกล้องเพื่อลงเวลา');
+    setStatus($('#kStatus'), 'idle', idleText());
     requestWakeLock();
     runLoop();
   })().finally(() => { kioskStarting = null; });
@@ -1390,7 +1413,7 @@ function handleKiosk(det, video) {
   const st = $('#kStatus'), canvas = $('#kCanvas'), now = Date.now();
   if (!det) {
     if (cand && now - cand.lastSeen < 1500) return;   // a frame or two without a face: keep going
-    resetCand(); drawBox(canvas, video, null); setStatus(st, 'idle', 'มองกล้องเพื่อลงเวลา'); return;
+    resetCand(); drawBox(canvas, video, null); setStatus(st, 'idle', idleText()); return;
   }
   if (det.detection.box.width < video.videoWidth * 0.16) { drawBox(canvas, video, det, '#e5a93b'); setStatus(st, 'warn', 'กรุณาเข้าใกล้กล้องอีกนิด'); resetCand(); return; }
   if (!matcher) { drawBox(canvas, video, det, '#e5a93b'); setStatus(st, 'warn', 'ยังไม่มีพนักงานลงทะเบียน ไปที่เมนู "พนักงาน"'); return; }
@@ -1501,7 +1524,11 @@ function showResult(emp, res) {
   drawBox($('#kCanvas'), $('#kVideo'), null);
   const img = (res.ev?.snap) || emp.photo; $('#kResImg').style.visibility = img ? 'visible' : 'hidden'; if (img) $('#kResImg').src = img;
   $('#kResName').textContent = emp.name;
-  if (res.dup) {
+  if (res.noIn) {
+    $('#kResSub').textContent = 'วันนี้ยังไม่ได้สแกนเข้างาน — ไม่มีอะไรให้ลงเวลาเลิกงาน';
+    setStatus(st, 'warn', `คุณ${emp.name} ยังไม่ได้เข้างานวันนี้`);
+    beep(false);
+  } else if (res.dup) {
     const typ = TYPE_LABEL[res.last.type];
     $('#kResSub').textContent = `ลงเวลา${typ}ไปแล้วเมื่อ ${hm(res.last.time)} น.`;
     setStatus(st, 'warn', `คุณ${emp.name} ลงเวลาไปแล้ว`);
