@@ -282,6 +282,10 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
           </div>
         </div>
         <div class="status idle" id="kStatus">มองกล้องเพื่อลงเวลา</div>
+        <div class="lunch-banner out" id="moveBanner">
+          <b id="moveText"></b>
+          <button class="btn sm" id="btnMoveCancel">ยกเลิก</button>
+        </div>
         <div class="lunch-banner out" id="outBanner">
           <b id="outText"></b>
           <button class="btn sm" id="btnOutCancel">ยกเลิก</button>
@@ -291,6 +295,7 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
           <button class="btn sm" id="btnLunchMode"></button>
         </div>
         <div class="actions">
+          <button class="btn" id="btnMove">🔁 ย้ายหน้างาน</button>
           <button class="btn" id="btnOutNow">🏠 เลิกงาน (กลับก่อน)</button>
           <button class="btn primary" id="btnLeave">ขอลา</button>
           <button class="btn" id="btnManual">สแกนไม่ผ่าน? ลงเวลาด้วยการเลือกชื่อ</button>
@@ -358,6 +363,14 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
           <tbody id="mBody"></tbody>
         </table>
       </div>
+      <h3>ค่าแรงตามหน้างาน (ใช้แบ่งต้นทุน)</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>หน้างาน</th><th>คน-วัน</th><th>ชั่วโมงทำงาน (รวม OT)</th><th>ค่าแรง (บาท)</th><th>สัดส่วน</th></tr></thead>
+          <tbody id="mStation"></tbody>
+        </table>
+      </div>
+      <p class="small muted" style="margin:6px 0 0">วันที่ย้ายหน้างาน แบ่งตามเวลาที่อยู่แต่ละหน้างาน · OT นับให้หน้างานสุดท้ายของวัน · ไม่รวมค่าจ้างวันลา/วันหยุดนักขัตฤกษ์ และยังไม่หักประกันสังคม</p>
     </div>
     <div class="card">
       <h2>รายวัน</h2>
@@ -378,7 +391,8 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
       <h3>เพิ่ม / แก้เวลาโดย HR (กรณีลืมสแกน)</h3>
       <form class="toolbar" id="hrForm">
         <label class="f"><span>พนักงาน</span><select id="hrEmp" required></select></label>
-        <label class="f"><span>ประเภท</span><select id="hrType"><option value="in">เข้างาน</option><option value="out">ออกงาน</option><option value="lunch">OT เที่ยง</option></select></label>
+        <label class="f"><span>ประเภท</span><select id="hrType"><option value="in">เข้างาน</option><option value="out">ออกงาน</option><option value="lunch">OT เที่ยง</option><option value="move">ย้ายหน้างาน</option></select></label>
+        <label class="f" id="hrStationWrap" style="display:none"><span>ย้ายไปหน้างาน</span><select id="hrStation"></select></label>
         <label class="f"><span>เวลา</span><input type="time" id="hrTime" required></label>
         <button class="btn" type="submit">เพิ่มเวลา</button>
       </form>
@@ -1010,6 +1024,62 @@ function payrollFor(emp, month) {
   return r;
 }
 const fmtBaht = n => n ? n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-';
+// Time at each station on one day: from check-in (its station) through each 'move' to check-out
+// (or the end of the shift if they forgot to scan out), minus the lunch break. Returns per-station minutes
+// and share of the day, plus the station they ended the day at (evening OT is charged there).
+function stationSplit(emp, key, s = daySummary(emp, key)) {
+  if (!s.present) return { parts: [], last: null };
+  const start = s.firstIn;
+  let end = s.lastOut;
+  if (!end) end = key === dayKey(Date.now()) ? Math.max(start, Date.now()) : Math.max(start, new Date(`${key}T${settings.shiftEnd}:00`).getTime());
+  const inEv = s.evs.find(e => e.type === 'in' && e.time === start);
+  const marks = [{ t: start, st: inEv?.station || '' }, ...s.evs.filter(e => e.type === 'move' && e.time > start && e.time < end).map(e => ({ t: e.time, st: e.station || '' }))];
+  const ls = minutesOf(settings.lunchStart), le = minutesOf(settings.lunchEnd), ss = minutesOf(settings.shiftStart), se = minutesOf(settings.shiftEnd);
+  const lunchIn = (a, b) => Math.max(0, Math.min(b, le) - Math.max(a, ls));
+  const mins = new Map(), regs = new Map();
+  marks.forEach((m, i) => {
+    const b = i + 1 < marks.length ? marks[i + 1].t : end;
+    const am = minOfDay(m.t), bm = am + (b - m.t) / 60000;
+    mins.set(m.st, (mins.get(m.st) || 0) + Math.max(0, bm - am - lunchIn(am, bm)));
+    // the day's pay is shared by normal working hours only (OT is charged separately)
+    const ra = Math.max(am, ss), rb = Math.min(bm, se);
+    regs.set(m.st, (regs.get(m.st) || 0) + (rb > ra ? rb - ra - lunchIn(ra, rb) : 0));
+  });
+  const regTotal = [...regs.values()].reduce((a, b) => a + b, 0), total = [...mins.values()].reduce((a, b) => a + b, 0);
+  const parts = [...mins.entries()].filter(([, m]) => m > 0 || !total).map(([st, min]) => ({
+    st, min, share: regTotal ? (regs.get(st) || 0) / regTotal : total ? min / total : 1 / mins.size }));
+  return { parts, last: marks[marks.length - 1].st };
+}
+// Labour cost per station for a month (up to today): day pay split by time at each station, OT charged to the
+// station they finished at. Leave and paid holidays are not tied to a station, social security not deducted.
+function stationCosts(month) {
+  const p = { ...DEFAULTS.payroll, ...(settings.payroll || {}) };
+  const [y, m] = month.split('-').map(Number), days = new Date(y, m, 0).getDate(), today = dayKey(Date.now());
+  const rows = new Map(), detail = [];
+  const add = (map, st, k, v) => { const r = map.get(st) || { days: 0, min: 0, pay: 0 }; r[k] += v; map.set(st, r); };
+  for (const emp of employees) {
+    const wage = Number(wages[emp.id] || 0), hourly = wage / (Number(p.hoursPerDay) || 8), mine = new Map();
+    for (let d = 1; d <= days; d++) {
+      const key = `${month}-${pad(d)}`;
+      if (key > today) break;
+      const sd = daySummary(emp, key);
+      if (!sd.present) continue;
+      const { parts, last } = stationSplit(emp, key, sd);
+      const dayPay = sd.dayValue * wage * (sd.info.work ? 1 : p.holidayMult);
+      const otPay = (sd.otMin + sd.lunchMin) / 60 * hourly * (sd.info.work ? p.otMult : p.holidayOtMult);
+      for (const x of parts) {
+        for (const map of [rows, mine]) { add(map, x.st, 'days', sd.dayValue * x.share); add(map, x.st, 'min', x.min); add(map, x.st, 'pay', dayPay * x.share); }
+      }
+      for (const map of [rows, mine]) { add(map, last, 'pay', otPay); add(map, last, 'min', sd.otMin + sd.lunchMin); }
+    }
+    for (const [st, r] of mine) detail.push({ emp, st, ...r, pay: baht(r.pay) });
+  }
+  const list = [...rows.entries()].map(([st, r]) => ({ st, ...r, pay: baht(r.pay) }));
+  const order = id => { const i = (settings.stations || []).findIndex(x => x.id === id); return i < 0 ? 99 : i; };
+  list.sort((a, b) => order(a.st) - order(b.st)); detail.sort((a, b) => a.emp.name.localeCompare(b.emp.name, 'th') || order(a.st) - order(b.st));
+  return { list, detail, total: baht(list.reduce((a, r) => a + r.pay, 0)) };
+}
+const stationName = id => id ? stationLabel(id) : '— ไม่ระบุ —';
 const fmtDays = n => Number.isInteger(n) ? String(n) : n.toFixed(1);
 // Monthly totals per employee: days actually worked (half days count 0.5) + OT
 function monthSummary(emp, month) {
@@ -1043,7 +1113,7 @@ let lunchOutMode = false;
 /* ปุ่ม "เลิกงาน (กลับก่อน)": สแกนครั้งถัดไปภายใน 60 วิ = ออกงาน ไม่ว่าช่วงไหน (ทำงานไม่เต็มวัน / กลับตอนเที่ยง) */
 let outUntil = 0, outTimer = null;
 const outMode = () => outUntil > Date.now();
-const idleText = () => outMode() ? '🏠 โหมดเลิกงาน — มองกล้องเพื่อลงเวลากลับบ้าน' : 'มองกล้องเพื่อลงเวลา';
+const idleText = () => moveMode() ? '🔁 โหมดย้ายหน้างาน — มองกล้อง แล้วเลือกหน้างานใหม่' : outMode() ? '🏠 โหมดเลิกงาน — มองกล้องเพื่อลงเวลากลับบ้าน' : 'มองกล้องเพื่อลงเวลา';
 function renderOutMode() {
   const on = outMode();
   $('#outBanner').classList.toggle('show', on); $('#btnOutNow').classList.toggle('on', on);
@@ -1051,7 +1121,19 @@ function renderOutMode() {
   clearTimeout(outTimer); if (on) outTimer = setTimeout(renderOutMode, 1000);
   else if (/โหมดเลิกงาน/.test($('#kStatus').textContent)) setStatus($('#kStatus'), 'idle', idleText());
 }
-function setOutMode(on) { outUntil = on ? Date.now() + 60000 : 0; renderOutMode(); if (on) setStatus($('#kStatus'), 'warn', idleText()); }
+function setOutMode(on) { if (on) setMoveMode(false); outUntil = on ? Date.now() + 60000 : 0; renderOutMode(); if (on) setStatus($('#kStatus'), 'warn', idleText()); }
+/* ปุ่ม "ย้ายหน้างาน": ทำงานคนละหน้างานในวันเดียว (เช่น เช้าไลน์ บ่ายตัดผ้า) — สแกนครั้งถัดไปภายใน 60 วิ = ย้ายหน้างาน แล้วแตะเลือกหน้างานใหม่
+   ชั่วโมงทำงานของวันนั้นจะแบ่งตามเวลาที่อยู่แต่ละหน้างาน (stationSplit) */
+let moveUntil = 0, moveTimer = null;
+const moveMode = () => moveUntil > Date.now();
+function renderMoveMode() {
+  const on = moveMode();
+  $('#moveBanner').classList.toggle('show', on); $('#btnMove').classList.toggle('on', on);
+  if (on) $('#moveText').textContent = '🔁 โหมดย้ายหน้างาน: สแกนหน้า แล้วแตะเลือกหน้างานใหม่ (เหลือ ' + Math.ceil((moveUntil - Date.now()) / 1000) + ' วิ)';
+  clearTimeout(moveTimer); if (on) moveTimer = setTimeout(renderMoveMode, 1000);
+  else if (/โหมดย้ายหน้างาน/.test($('#kStatus').textContent)) setStatus($('#kStatus'), 'idle', idleText());
+}
+function setMoveMode(on) { if (on) setOutMode(false); moveUntil = on ? Date.now() + 60000 : 0; renderMoveMode(); if (on) setStatus($('#kStatus'), 'warn', idleText()); }
 function recordEvent(emp, { score = null, live = false, source = 'face', snap = null }) {
   const now = Date.now(), today = dayKey(now);
   const mine = events.filter(e => e.empId === emp.id);
@@ -1060,6 +1142,14 @@ function recordEvent(emp, { score = null, live = false, source = 'face', snap = 
   const todays = mine.filter(e => dayKey(e.time) === today);
   let type = todays.some(e => e.type === 'in') ? 'out' : 'in';
   const lastToday = todays[todays.length - 1];
+  if (moveMode()) {
+    setMoveMode(false);
+    if (!todays.some(e => e.type === 'in')) return { noIn: true, move: true };   /* ยังไม่ได้เข้างาน — ย้ายไม่ได้ */
+    const mv = { id: uid(), empId: emp.id, time: now, type: 'move', score, live, source, snap, station: null };
+    events.push(mv);
+    pushEvent(mv, (stationWait() + 30) * 1000);   /* รอเลือกหน้างานก่อนส่ง (เหมือนตอนเข้างาน) */
+    return { ev: mv, pick: true, suggest: null, move: true };
+  }
   const forceOut = outMode();
   if (forceOut) { setOutMode(false); if (type !== 'out') return { noIn: true }; }   /* กดเลิกงานแต่วันนี้ยังไม่ได้สแกนเข้า */
   if (!forceOut && type === 'out' && lastToday?.type === 'in' && now - lastToday.time < MIN_OUT_AFTER_IN * 60000) return { dup: true, last: lastToday };
@@ -1090,7 +1180,7 @@ function lastStation(empId, onlyReal) {
 /* รอเลือกหน้างานนานสุดกี่วินาที (ระหว่างนี้ไม่สแกนคนถัดไป) */
 const stationWait = () => Math.min(30, Math.max(10, +settings.stationWait || 15));
 const stationLabel = id => { const x = (settings.stations || []).find(s => s.id === id); return x ? `${x.icon} ${x.name}` : (id || '-'); };
-const TYPE_LABEL = { in: 'เข้างาน', out: 'ออกงาน', lunch: 'OT เที่ยง' };
+const TYPE_LABEL = { in: 'เข้างาน', out: 'ออกงาน', lunch: 'OT เที่ยง', move: 'ย้ายหน้างาน' };
 const MIN_OUT_AFTER_IN = 30; // minutes: scanning again sooner than this after checking in is treated as a repeat
 function renderLunchBanner() {
   const show = settings.lunchScan && inLunchWindow();
@@ -1103,6 +1193,8 @@ function renderLunchBanner() {
 }
 $('#btnLunchMode').addEventListener('click', () => { lunchOutMode = !lunchOutMode; renderLunchBanner(); });
 $('#btnOutNow').addEventListener('click', () => setOutMode(!outMode()));
+$('#btnMove').addEventListener('click', () => setMoveMode(!moveMode()));
+$('#btnMoveCancel').addEventListener('click', () => setMoveMode(false));
 $('#btnOutCancel').addEventListener('click', () => setOutMode(false));
 
 /* ---------- face engine ---------- */
@@ -1487,11 +1579,11 @@ function commitStation(station) {
   releaseHeld(p.ev.id, p.ev.station);
   $('#kStations').classList.remove('show'); $('#kStations').innerHTML = '';
 }
-function showStationPicker(emp, ev, suggest) {
+function showStationPicker(emp, ev, suggest, title = 'แตะเลือกหน้างานวันนี้ก่อน') {
   const box = $('#kStations'), wait = stationWait();
   stationPending = { ev };
   const draw = left => {
-    box.innerHTML = `<div class="lbl need">👆 แตะเลือกหน้างานวันนี้ก่อน (เหลือ ${left} วิ)</div>` +
+    box.innerHTML = `<div class="lbl need">👆 ${title} (เหลือ ${left} วิ)</div>` +
       (settings.stations || []).map(x => `<button type="button" data-st="${esc(x.id)}" class="${x.id === suggest ? 'on' : ''}"><span class="ic">${esc(x.icon)}</span>${esc(x.name)}${x.id === suggest ? '<span class="prev">ครั้งก่อน</span>' : ''}</button>`).join('');
   };
   let left = wait; draw(left); box.classList.add('show');
@@ -1525,7 +1617,7 @@ function showResult(emp, res) {
   const img = (res.ev?.snap) || emp.photo; $('#kResImg').style.visibility = img ? 'visible' : 'hidden'; if (img) $('#kResImg').src = img;
   $('#kResName').textContent = emp.name;
   if (res.noIn) {
-    $('#kResSub').textContent = 'วันนี้ยังไม่ได้สแกนเข้างาน — ไม่มีอะไรให้ลงเวลาเลิกงาน';
+    $('#kResSub').textContent = res.move ? 'วันนี้ยังไม่ได้สแกนเข้างาน — สแกนเข้างานก่อน แล้วค่อยย้ายหน้างาน' : 'วันนี้ยังไม่ได้สแกนเข้างาน — ไม่มีอะไรให้ลงเวลาเลิกงาน';
     setStatus(st, 'warn', `คุณ${emp.name} ยังไม่ได้เข้างานวันนี้`);
     beep(false);
   } else if (res.dup) {
@@ -1537,20 +1629,21 @@ function showResult(emp, res) {
     const ev = res.ev, s = daySummary(emp, dayKey(ev.time));
     const typ = TYPE_LABEL[ev.type];
     let badge;
-    if (ev.type === 'lunch') badge = `<span class="badge b-info">+${fmtMin(s.lunchMin)}</span>`;
+    if (ev.type === 'move') badge = '';   /* the station picker below says the rest */
+    else if (ev.type === 'lunch') badge = `<span class="badge b-info">+${fmtMin(s.lunchMin)}</span>`;
     else if (s.info.type === 'off') badge = '<span class="badge b-info">ทำงานวันหยุด</span>';
     else if (ev.type === 'in') badge = (s.afternoon ? '<span class="badge b-info">ครึ่งวันบ่าย</span> ' : '') + (s.late ? `<span class="badge b-warn">สาย ${s.late} นาที</span>` : s.afternoon ? '' : '<span class="badge b-ok">ตรงเวลา</span>');
     else badge = s.otMin ? `<span class="badge b-info">OT เย็น ${fmtMin(s.otMin)}</span>` : s.half ? '<span class="badge b-info">ครึ่งวัน</span>' : '<span class="badge b-info">ออกงาน</span>';
     $('#kResSub').innerHTML = `${typ} ${hm(ev.time)} น. ${badge}`;
     setStatus(st, 'ok', ev.type === 'lunch' ? '✓ บันทึก OT เที่ยงสำเร็จ' : `✓ บันทึกเวลา${typ}สำเร็จ`);
     beep(true);
-    speak(ev.type === 'in' ? `สวัสดีค่ะ คุณ${emp.name}${res.pick ? ' กรุณาเลือกหน้างานของตัวเองด้วยค่ะ' : ''}` : ev.type === 'lunch' ? `บันทึกโอทีเที่ยง คุณ${emp.name}` : `ขอบคุณค่ะ คุณ${emp.name} เดินทางปลอดภัยนะคะ`);
+    speak(ev.type === 'move' ? `คุณ${emp.name} กรุณาเลือกหน้างานใหม่ค่ะ` : ev.type === 'in' ? `สวัสดีค่ะ คุณ${emp.name}${res.pick ? ' กรุณาเลือกหน้างานของตัวเองด้วยค่ะ' : ''}` : ev.type === 'lunch' ? `บันทึกโอทีเที่ยง คุณ${emp.name}` : `ขอบคุณค่ะ คุณ${emp.name} เดินทางปลอดภัยนะคะ`);
     renderKioskSide();
   }
   $('#kResult').classList.add('show');
   clearTimeout(resultTimer);
   /* เข้างาน: ต้องเลือกหน้างานก่อน — ไม่สแกนคนถัดไปจนกว่าจะเลือก (หรือครบเวลา) */
-  if (res.pick && res.ev) { showStationPicker(emp, res.ev, res.suggest); pauseUntil = Date.now() + (stationWait() + 1) * 1000; return; }
+  if (res.pick && res.ev) { showStationPicker(emp, res.ev, res.suggest, res.move ? 'แตะเลือกหน้างานที่ย้ายไป' : undefined); pauseUntil = Date.now() + (stationWait() + 1) * 1000; return; }
   resultTimer = setTimeout(() => $('#kResult').classList.remove('show'), 3000);
 }
 function renderKioskSide() {
@@ -1565,7 +1658,7 @@ function renderKioskSide() {
   $('#kRecent').innerHTML = today.length ? today.map(ev => {
     const emp = empById(ev.empId); if (!emp) return '';
     const late = ev.type === 'in' ? daySummary(emp, key).late : 0;
-    const badge = ev.type === 'out' ? '<span class="badge b-info">ออก</span>' : ev.type === 'lunch' ? '<span class="badge b-info">OT เที่ยง</span>' : late ? `<span class="badge b-warn">สาย ${late}น.</span>` : '<span class="badge b-ok">เข้า</span>';
+    const badge = ev.type === 'move' ? `<span class="badge b-info">🔁 ${esc(ev.station ? stationLabel(ev.station) : 'ย้าย')}</span>` : ev.type === 'out' ? '<span class="badge b-info">ออก</span>' : ev.type === 'lunch' ? '<span class="badge b-info">OT เที่ยง</span>' : late ? `<span class="badge b-warn">สาย ${late}น.</span>` : '<span class="badge b-ok">เข้า</span>';
     return `<div class="row">${(ev.snap || emp.photo) ? `<img src="${esc(ev.snap || emp.photo)}" alt="">` : '<div class="avatar"></div>'}<div class="grow"><div>${esc(emp.name)}</div><div class="small muted">${esc(emp.dept || '-')}${ev.source !== 'face' ? ' · ' + SOURCE_LABEL[ev.source] : ''}</div></div><div style="text-align:right"><div class="t">${hm(ev.time)}</div>${badge}</div></div>`;
   }).join('') : '<div class="empty">ยังไม่มีการลงเวลาวันนี้</div>';
 }
@@ -1707,7 +1800,7 @@ function renderReports() {
     : '<tr><td colspan="10" class="empty">ยังไม่มีพนักงาน</td></tr>';
   $('#hrEmp').innerHTML = employees.map(e => `<option value="${e.id}">${esc(e.name)}${e.dept ? ` · ${esc(e.dept)}` : ''}</option>`).join('');
   const log = events.filter(e => dayKey(e.time) === key).sort((a, b) => b.time - a.time);
-  const typeBadge = { in: 'b-ok', out: 'b-info', lunch: 'b-warn' };
+  const typeBadge = { in: 'b-ok', out: 'b-info', lunch: 'b-warn', move: 'b-info' };
   $('#rLog').innerHTML = log.length ? log.map(ev => {
     const emp = empById(ev.empId);
     return `<tr><td class="num">${hms(ev.time)}</td>
@@ -1724,8 +1817,12 @@ function renderReports() {
 function stationCell(emp, key) {
   const inEv = events.filter(x => x.empId === emp.id && x.type === 'in' && dayKey(x.time) === key).sort((a, b) => a.time - b.time)[0];
   if (!inEv) return '-';
-  const opts = (settings.stations || []).map(x => `<option value="${esc(x.id)}"${x.id === inEv.station ? ' selected' : ''}>${esc(x.icon)} ${esc(x.name)}</option>`).join('');
-  return `<select data-stev="${inEv.id}" style="min-width:120px"><option value=""${inEv.station ? '' : ' selected'}>— ไม่ระบุ —</option>${opts}</select>`;
+  const sel = ev => `<select data-stev="${ev.id}" style="min-width:120px"><option value=""${ev.station ? '' : ' selected'}>— ไม่ระบุ —</option>${(settings.stations || []).map(x => `<option value="${esc(x.id)}"${x.id === ev.station ? ' selected' : ''}>${esc(x.icon)} ${esc(x.name)}</option>`).join('')}</select>`;
+  const moves = events.filter(x => x.empId === emp.id && x.type === 'move' && dayKey(x.time) === key && x.time > inEv.time).sort((a, b) => a.time - b.time);
+  if (!moves.length) return sel(inEv);
+  const { parts } = stationSplit(emp, key);
+  return `<div>${hm(inEv.time)} ${sel(inEv)}</div>${moves.map(m => `<div style="margin-top:4px">→ ${hm(m.time)} ${sel(m)}</div>`).join('')}
+    <div class="small muted" style="margin-top:4px">${parts.map(x => `${esc(stationName(x.st))} ${fmtMin(x.min)}`).join(' · ')}</div>`;
 }
 $('#rBody').addEventListener('change', async e => {
   const sel = e.target.closest('[data-stev]'); if (!sel) return;
@@ -1758,6 +1855,11 @@ function renderMonthSummary() {
       <td class="num">${pay.wage ? fmtBaht(pay.gross) : '<span class="small muted">ยังไม่ใส่ค่าแรง</span>'}</td>
       <td class="num"><b>${pay.wage ? fmtBaht(pay.net) : '-'}</b></td></tr>`;
   }).join('') : '<tr><td colspan="13" class="empty">ยังไม่มีพนักงาน</td></tr>';
+  const sc = stationCosts(m);
+  $('#mStation').innerHTML = sc.list.length ? sc.list.map(r => `<tr><td>${esc(stationName(r.st))}</td><td class="num">${fmtDays(Math.round(r.days * 10) / 10)}</td>
+      <td class="num">${fmtMin(r.min)}</td><td class="num">${fmtBaht(r.pay)}</td><td class="num">${sc.total ? Math.round(r.pay / sc.total * 100) + '%' : '-'}</td></tr>`).join('')
+      + `<tr><td><b>รวม</b></td><td></td><td></td><td class="num"><b>${fmtBaht(sc.total)}</b></td><td></td></tr>`
+    : '<tr><td colspan="5" class="empty">ยังไม่มีข้อมูลเดือนนี้</td></tr>';
 }
 $('#rLog').addEventListener('click', async ev => {
   const b = ev.target.closest('[data-delev]'); if (!b) return;
@@ -1768,12 +1870,18 @@ $('#rLog').addEventListener('click', async ev => {
 });
 $('#rDate').addEventListener('change', renderReports);
 $('#rMonth').addEventListener('change', renderMonthSummary);
+$('#hrType').addEventListener('change', () => {
+  const mv = $('#hrType').value === 'move';
+  $('#hrStationWrap').style.display = mv ? '' : 'none';
+  if (mv) $('#hrStation').innerHTML = (settings.stations || []).map(x => `<option value="${esc(x.id)}">${esc(x.icon)} ${esc(x.name)}</option>`).join('');
+});
 $('#hrForm').addEventListener('submit', ev => {
   ev.preventDefault();
   const emp = empById($('#hrEmp').value), key = $('#rDate').value || dayKey(Date.now()), t = $('#hrTime').value, type = $('#hrType').value;
   if (!emp || !t) return;
   const time = new Date(`${key}T${t}:00`).getTime();
-  const hrEv = { id: uid(), empId: emp.id, time, type, score: null, live: false, source: 'hr', snap: null };
+  if (type === 'move' && !daySummary(emp, key).firstIn) { toast('วันนั้นคนนี้ยังไม่มีเวลาเข้างาน — เพิ่มเวลาเข้างานก่อน', 'err'); return; }
+  const hrEv = { id: uid(), empId: emp.id, time, type, score: null, live: false, source: 'hr', snap: null, ...(type === 'move' ? { station: $('#hrStation').value || null } : {}) };
   events.push(hrEv);
   events.sort((a, b) => a.time - b.time);
   pushEvent(hrEv); renderReports();
@@ -1880,6 +1988,30 @@ async function exportPayrollExcel(m) {
   }
   wp.addRow([]);
   wp.addRow(['', 'ตรวจสอบกับฝ่ายบัญชีก่อนจ่ายจริง · ค่าแรงคิดตามเวลาสแกน วันลาที่อนุมัติ และปฏิทินวันหยุดในระบบ']).getCell(2).font = { size: 10, color: { argb: 'FF5C6773' } };
+
+  /* sheet: labour cost by station (for costing) */
+  const sc = stationCosts(m);
+  const ss = wb.addWorksheet('ค่าแรงตามหน้างาน', { views: [{ state: 'frozen', ySplit: 3 }], pageSetup: { orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 } });
+  xlTitle(ss, `ค่าแรงตามหน้างาน — ${label} (${upTo})`, 'วันที่ย้ายหน้างาน แบ่งตามเวลาที่อยู่แต่ละหน้างาน · OT นับให้หน้างานสุดท้ายของวัน · ไม่รวมค่าจ้างวันลา/วันหยุดนักขัตฤกษ์ ยังไม่หักประกันสังคม', 5);
+  xlHeader(ss, 3, ['หน้างาน', 'คน-วัน', 'ชั่วโมงทำงาน (รวม OT)', 'ค่าแรง (บาท)', 'สัดส่วน']);
+  ss.columns = [24, 12, 18, 16, 10].map(width => ({ width }));
+  sc.list.forEach(r => {
+    const row = ss.addRow([stationName(r.st), Math.round(r.days * 100) / 100, xlHours(r.min), r.pay, sc.total ? r.pay / sc.total : 0]);
+    row.eachCell({ includeEmpty: true }, (c, n) => { c.border = XL.border; if (n === 2) c.numFmt = '0.0#'; if (n === 3) c.numFmt = '0.00'; if (n === 4) c.numFmt = '#,##0.00'; if (n === 5) c.numFmt = '0%'; });
+    if (!r.st) row.getCell(1).fill = XL.miss;
+  });
+  if (sc.list.length) {
+    const last = 3 + sc.list.length;
+    const tr = ss.addRow(['รวม', { formula: `SUM(B4:B${last})` }, { formula: `SUM(C4:C${last})` }, { formula: `SUM(D4:D${last})` }, '']);
+    tr.eachCell({ includeEmpty: true }, (c, n) => { c.font = { bold: true }; c.fill = XL.total; c.border = XL.border; if (n === 2) c.numFmt = '0.0#'; if (n === 3) c.numFmt = '0.00'; if (n === 4) c.numFmt = '#,##0.00'; });
+  }
+  ss.addRow([]);
+  const hdr = ss.addRow(['รายคน', 'หน้างาน', 'คน-วัน', 'ชั่วโมง', 'ค่าแรง (บาท)']);
+  hdr.eachCell(c => { c.fill = XL.head; c.font = { bold: true, color: { argb: 'FFFFFFFF' } }; c.border = XL.border; });
+  sc.detail.forEach(r => {
+    const row = ss.addRow([r.emp.name, stationName(r.st), Math.round(r.days * 100) / 100, xlHours(r.min), r.pay]);
+    row.eachCell({ includeEmpty: true }, (c, n) => { c.border = XL.border; if (n === 3) c.numFmt = '0.0#'; if (n === 4) c.numFmt = '0.00'; if (n === 5) c.numFmt = '#,##0.00'; });
+  });
 
   /* sheet 1: payroll summary, one row per employee, totals at the bottom */
   const cols = ['ลำดับ', 'ชื่อ-นามสกุล', 'แผนก', 'มาทำงาน (วัน)', 'ครึ่งวัน (ครั้ง)', 'มาวันหยุดโรงงาน (วัน)', 'สาย (ครั้ง)', 'สายรวม (นาที)', 'ไม่สแกนออก (ครั้ง)', 'ชม.ทำงานปกติ', 'OT เที่ยง (ครั้ง)', 'OT เที่ยง (ชม.)', 'OT เย็น (ชม.)', 'OT รวม (ชม.)', 'ลาป่วย (วัน)', 'ลากิจ (วัน)', 'ลาพักร้อน (วัน)', 'ลาอื่นๆ (วัน)', 'หมายเหตุ'];

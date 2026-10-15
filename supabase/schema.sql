@@ -1,5 +1,5 @@
 -- Face attendance app schema (applied to Supabase as migrations
--- att_face_attendance_schema + att_move_is_staff_to_private_schema + att_drop_employee_code + att_roles_hr_and_kiosk + att_split_write_policies_and_snap_retention + att_leaves + att_wages_and_paid_holidays + att_line_notifications).
+-- att_face_attendance_schema + att_move_is_staff_to_private_schema + att_drop_employee_code + att_roles_hr_and_kiosk + att_split_write_policies_and_snap_retention + att_leaves + att_wages_and_paid_holidays + att_line_notifications + att_events_station_move).
 -- Roles: hr = everything; kiosk = read what scanning needs + add scans only.
 -- Only users listed in att_staff can read or write anything.
 
@@ -26,7 +26,7 @@ create table public.att_events (
   id text primary key default gen_random_uuid()::text,
   emp_id text not null,                 -- no FK: history is kept after an employee is removed
   time timestamptz not null,
-  type text not null check (type in ('in','out','lunch')),
+  type text not null check (type in ('in','out','lunch','move')),   -- move = switched station during the day
   score int,
   live boolean not null default false,
   source text not null default 'face' check (source in ('face','manual','hr')),
