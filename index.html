@@ -349,6 +349,20 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
   <!-- REPORTS -->
   <section class="view" id="view-reports">
     <div class="card" style="margin-bottom:20px">
+      <h2>งวดจ่ายเงิน</h2>
+      <div class="toolbar">
+        <label class="f"><span>งวด</span><select id="pPeriod" style="min-width:300px"></select></label>
+        <button class="btn primary" id="btnExportPeriod">ส่งออก Excel งวดนี้</button>
+      </div>
+      <div class="note" id="pInfo" style="margin:0 0 14px"></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>ชื่อ</th><th>ค่าแรง/วัน</th><th>มาทำงาน (วัน)</th><th>OT</th><th>ลาได้ค่าจ้าง (วัน)</th><th>รายได้รวม (บาท)</th><th>ประกันสังคม</th><th>รับสุทธิ (บาท)</th></tr></thead>
+          <tbody id="pBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card" style="margin-bottom:20px">
       <h2>สรุปรายเดือน (วันที่มาทำงาน / OT)</h2>
       <div class="toolbar">
         <label class="f"><span>เดือน</span><input type="month" id="rMonth"></label>
@@ -560,6 +574,12 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
           <label class="f" style="flex:1;min-width:120px"><span>ฐานค่าจ้างสูงสุด (บาท)</span><input type="number" id="pSsoMax" min="0" step="1"></label>
         </div>
         <p class="small muted" style="margin:0 0 12px">ปี 2569–2571: 5% ของค่าจ้าง ฐานไม่เกิน 17,500 บาท (หักสูงสุด 875 บาท/เดือน) · คิดจากค่าจ้างเวลาปกติ ไม่รวม OT</p>
+        <h3>งวดจ่ายเงิน (เดือนละ 2 งวด)</h3>
+        <div class="range-row" style="flex-wrap:wrap">
+          <label class="f" style="flex:1;min-width:150px"><span>ตัดรอบ / จ่ายเงิน วันที่</span><input type="number" id="pCut1" min="1" max="31" step="1"></label>
+          <label class="f" style="flex:1;min-width:150px"><span>และวันที่</span><input type="number" id="pCut2" min="1" max="31" step="1"></label>
+        </div>
+        <p class="small muted" style="margin:0 0 12px" id="pCutHelp"></p>
         <button class="btn primary" type="submit">บันทึกการคำนวณค่าแรง</button>
       </form>
     </div>
@@ -685,6 +705,7 @@ const store = {
 const DEFAULTS = {
   shiftStart: '08:30', shiftEnd: '17:30', grace: 5, cooldown: 60, threshold: 0.5, liveness: true, sound: true, voice: true,
   workDays: [1, 2, 3, 4, 5, 6], leaveQuota: { sick: 30, personal: 3, vacation: 6 }, lunchStart: '12:00', lunchEnd: '13:00', lunchScan: true, otAfter: 30, otRound: 30, halfDayHours: 5,
+  payPeriods: { cutoffs: [5, 20] },
   payroll: { hoursPerDay: 8, otMult: 1.5, holidayMult: 2, holidayOtMult: 3, payLeave: true, sso: true, ssoRate: 5, ssoMinBase: 1650, ssoMaxBase: 17500 },
   // หน้างานที่ให้เลือกตอนสแกนเข้างาน (ใช้แบ่งค่าแรงลงต้นทุนในแอพต้นทุน)
   stationPick: true, stationWait: 15,
@@ -995,14 +1016,19 @@ function leaveDays(l, from = '0000', to = '9999') {
 //  approved leave  : sick / personal / vacation days x wage (if payLeave)
 //  social security : rate% of normal-time pay (no OT), base clamped to [min, max]
 const baht = n => Math.round(n * 100) / 100;
-function payrollFor(emp, month) {
+const keysBetween = (from, to) => { const out = []; for (let k = from; k <= to; k = addDays(k, 1)) out.push(k); return out; };
+const monthRange = month => { const [y, m] = month.split('-').map(Number); return [`${month}-01`, `${month}-${pad(new Date(y, m, 0).getDate())}`]; };
+const payrollFor = (emp, month) => payrollRange(emp, ...monthRange(month));
+// ssoHalf: 1 or 2 = one of the two pay periods of a month; each deducts half the monthly social security
+// (base clamped to half the monthly min/max). A capped half of 437.50 is rounded down in one period and up
+// in the other, so the month never goes over the 875 maximum.
+function payrollRange(emp, from, to, ssoHalf = 0) {
   const p = { ...DEFAULTS.payroll, ...(settings.payroll || {}) };
   const wage = Number(wages[emp.id] || 0), hourly = wage / (Number(p.hoursPerDay) || 8);
-  const [y, m] = month.split('-').map(Number), days = new Date(y, m, 0).getDate(), today = dayKey(Date.now());
+  const today = dayKey(Date.now());
   const hired = emp.createdAt ? dayKey(emp.createdAt) : '0000';
   const r = { wage, workDays: 0, offDays: 0, otWorkMin: 0, otOffMin: 0, leaveDays: 0, paidHolidays: 0 };
-  for (let d = 1; d <= days; d++) {
-    const key = `${month}-${pad(d)}`;
+  for (const key of keysBetween(from, to)) {
     if (key > today) break;
     const s = daySummary(emp, key);
     if (s.present) {
@@ -1018,8 +1044,10 @@ function payrollFor(emp, month) {
   r.leavePay = baht(r.leaveDays * wage);
   r.paidHolidayPay = baht(r.paidHolidays * wage);
   r.gross = baht(r.regularPay + r.holidayPay + r.otPay + r.otHolidayPay + r.leavePay + r.paidHolidayPay);
-  const ssoBase = Math.min(Number(p.ssoMaxBase), Math.max(Number(p.ssoMinBase), r.regularPay + r.holidayPay + r.leavePay + r.paidHolidayPay));
-  r.sso = p.sso && wage > 0 ? Math.round(ssoBase * Number(p.ssoRate) / 100) : 0;
+  const part = ssoHalf ? 2 : 1;
+  const ssoBase = Math.min(Number(p.ssoMaxBase) / part, Math.max(Number(p.ssoMinBase) / part, r.regularPay + r.holidayPay + r.leavePay + r.paidHolidayPay));
+  const ssoRaw = ssoBase * Number(p.ssoRate) / 100;
+  r.sso = p.sso && wage > 0 && r.gross > 0 ? (ssoHalf === 1 ? Math.ceil(ssoRaw - 0.5) : Math.round(ssoRaw)) : 0;
   r.net = baht(r.gross - r.sso);
   return r;
 }
@@ -1052,15 +1080,15 @@ function stationSplit(emp, key, s = daySummary(emp, key)) {
 }
 // Labour cost per station for a month (up to today): day pay split by time at each station, OT charged to the
 // station they finished at. Leave and paid holidays are not tied to a station, social security not deducted.
-function stationCosts(month) {
+const stationCosts = month => stationCostsRange(...monthRange(month));
+function stationCostsRange(from, to) {
   const p = { ...DEFAULTS.payroll, ...(settings.payroll || {}) };
-  const [y, m] = month.split('-').map(Number), days = new Date(y, m, 0).getDate(), today = dayKey(Date.now());
+  const today = dayKey(Date.now());
   const rows = new Map(), detail = [];
   const add = (map, st, k, v) => { const r = map.get(st) || { days: 0, min: 0, pay: 0 }; r[k] += v; map.set(st, r); };
   for (const emp of employees) {
     const wage = Number(wages[emp.id] || 0), hourly = wage / (Number(p.hoursPerDay) || 8), mine = new Map();
-    for (let d = 1; d <= days; d++) {
-      const key = `${month}-${pad(d)}`;
+    for (const key of keysBetween(from, to)) {
       if (key > today) break;
       const sd = daySummary(emp, key);
       if (!sd.present) continue;
@@ -1079,14 +1107,52 @@ function stationCosts(month) {
   list.sort((a, b) => order(a.st) - order(b.st)); detail.sort((a, b) => a.emp.name.localeCompare(b.emp.name, 'th') || order(a.st) - order(b.st));
   return { list, detail, total: baht(list.reduce((a, r) => a + r.pay, 0)) };
 }
+// Pay periods from the two cut-off days (default 5 and 20): c2+1 .. c1 of next month (paid on c1) and
+// c1+1 .. c2 (paid on c2). A cut-off past the end of a short month falls on its last day.
+const cutoffs = () => { const c = (settings.payPeriods?.cutoffs || DEFAULTS.payPeriods.cutoffs).map(Number).sort((a, b) => a - b); return c.length === 2 ? c : [5, 20]; };
+const dayOfMonth = (y, mo, d) => dayKey(new Date(y, mo, Math.min(d, new Date(y, mo + 1, 0).getDate())));
+function payPeriodList() {
+  const [c1, c2] = cutoffs(), today = dayKey(Date.now()), list = [];
+  for (let off = -5; off <= 1; off++) {
+    const b = new Date(); b.setDate(1); b.setMonth(b.getMonth() + off);
+    const y = b.getFullYear(), mo = b.getMonth();
+    list.push({ half: 1, from: addDays(dayOfMonth(y, mo - 1, c2), 1), to: dayOfMonth(y, mo, c1) });
+    list.push({ half: 2, from: addDays(dayOfMonth(y, mo, c1), 1), to: dayOfMonth(y, mo, c2) });
+  }
+  return list.filter(p => p.from <= today).map(p => ({ ...p, id: `${p.from}_${p.to}`, open: p.to >= today })).reverse().slice(0, 8);
+}
+const thShort = k => new Date(k + 'T00:00:00').toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' });
+const periodLabel = p => `${thShort(p.from)} – ${thShort(p.to)} · จ่าย ${thShort(p.to)}${p.open ? ' (ยังไม่ปิดงวด)' : ''}`;
+function selectedPeriod() {
+  const list = payPeriodList(), id = $('#pPeriod').value;
+  return list.find(p => p.id === id) || list[0];
+}
+function renderPeriod() {
+  const list = payPeriodList(), keep = $('#pPeriod').value;
+  $('#pPeriod').innerHTML = list.map(p => `<option value="${p.id}">${esc(periodLabel(p))}</option>`).join('');
+  if (list.some(p => p.id === keep)) $('#pPeriod').value = keep;
+  const p = selectedPeriod(); if (!p) return;
+  needData([...new Set([p.from.slice(0, 7), p.to.slice(0, 7)])], null, renderPeriod);
+  let tot = { gross: 0, sso: 0, net: 0 };
+  $('#pBody').innerHTML = employees.length ? employees.map(e => {
+    const r = payrollRange(e, p.from, p.to, p.half);
+    tot.gross += r.gross; tot.sso += r.sso; tot.net += r.net;
+    return `<tr><td>${esc(e.name)}</td><td class="num">${r.wage ? fmtBaht(r.wage) : '<span class="small muted">ยังไม่ใส่</span>'}</td>
+      <td class="num">${fmtDays(r.workDays + r.offDays)}</td><td class="num">${r.otWorkMin + r.otOffMin ? fmtMin(r.otWorkMin + r.otOffMin) : '-'}</td>
+      <td class="num">${r.leaveDays ? fmtDays(r.leaveDays) : '-'}</td>
+      <td class="num">${fmtBaht(r.gross)}</td><td class="num">${fmtBaht(r.sso)}</td><td class="num"><b>${fmtBaht(r.net)}</b></td></tr>`;
+  }).join('') + `<tr><td><b>รวม</b></td><td></td><td></td><td></td><td></td><td class="num"><b>${fmtBaht(baht(tot.gross))}</b></td><td class="num"><b>${fmtBaht(tot.sso)}</b></td><td class="num"><b>${fmtBaht(baht(tot.net))}</b></td></tr>`
+    : '<tr><td colspan="8" class="empty">ยังไม่มีพนักงาน</td></tr>';
+  $('#pInfo').textContent = p.open ? 'งวดนี้ยังไม่ปิด ตัวเลขนับถึงวันนี้ · ประกันสังคมหักครึ่งหนึ่งของเดือน' : 'ประกันสังคมหักครึ่งหนึ่งของเดือน (งวดละไม่เกิน ' + fmtBaht(Number((settings.payroll || DEFAULTS.payroll).ssoMaxBase) * Number((settings.payroll || DEFAULTS.payroll).ssoRate) / 200) + ' บาท)';
+}
 const stationName = id => id ? stationLabel(id) : '— ไม่ระบุ —';
 const fmtDays = n => Number.isInteger(n) ? String(n) : n.toFixed(1);
 // Monthly totals per employee: days actually worked (half days count 0.5) + OT
-function monthSummary(emp, month) {
-  const [y, m] = month.split('-').map(Number), days = new Date(y, m, 0).getDate(), today = dayKey(Date.now());
+const monthSummary = (emp, month) => summaryRange(emp, ...monthRange(month));
+function summaryRange(emp, from, to) {
+  const today = dayKey(Date.now());
   const r = { leave: { sick: 0, personal: 0, vacation: 0, other: 0 }, workedDays: 0, halfDays: 0, offDayWorked: 0, lateCount: 0, lateMin: 0, missingOut: 0, regularMin: 0, otMin: 0, lunchMin: 0, lunchDays: 0 };
-  for (let d = 1; d <= days; d++) {
-    const key = `${month}-${pad(d)}`;
+  for (const key of keysBetween(from, to)) {
     if (key > today) break;
     const s = daySummary(emp, key);
     if (s.leave) r.leave[s.leave.type] += s.leaveValue;
@@ -1778,6 +1844,7 @@ const toH = m => (Math.round(m) / 60).toFixed(2);
 const statCards = list => list.map(([l, n]) => `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
 const dayTypeBadge = info => `<span class="badge ${info.work ? 'b-ok' : 'b-mute'}">${DAY_TYPE_LABEL[info.type]}</span>${info.note ? ` <span class="small muted">${esc(info.note)}</span>` : ''}`;
 function renderReports() {
+  renderPeriod();
   renderMonthSummary();
   const key = $('#rDate').value || dayKey(Date.now());
   needData([key.slice(0, 7)], key, renderReports);
@@ -1952,11 +2019,14 @@ function xlTitle(ws, text, sub, lastCol) {
   ws.getCell(1, 1).value = text; ws.getCell(1, 1).font = { bold: true, size: 14 };
   ws.getCell(2, 1).value = sub; ws.getCell(2, 1).font = { size: 10, color: { argb: 'FF5C6773' } };
 }
-async function exportPayrollExcel(m) {
-  await Promise.all([loadExcelJS(), ensureMonth(m)]);
-  const [y, mo] = m.split('-').map(Number), days = new Date(y, mo, 0).getDate(), today = dayKey(Date.now());
-  const label = new Date(y, mo - 1, 1).toLocaleDateString('th-TH', { month: 'long', year: 'numeric' });
-  const upTo = `${m}-${pad(days)}` <= today ? 'ทั้งเดือน' : `ถึงวันที่ ${new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })}`;
+function exportPayrollExcel(m) {
+  const [from, to] = monthRange(m), [y, mo] = m.split('-').map(Number);
+  return exportPayroll({ from, to, half: 0, label: new Date(y, mo - 1, 1).toLocaleDateString('th-TH', { month: 'long', year: 'numeric' }), file: `เงินเดือน-${m}.xlsx`, whole: 'ทั้งเดือน' });
+}
+async function exportPayroll({ from, to, half, label, file, whole }) {
+  await Promise.all([loadExcelJS(), ...[...new Set([from.slice(0, 7), to.slice(0, 7)])].map(ensureMonth)]);
+  const today = dayKey(Date.now()), dayKeys = keysBetween(from, to), days = dayKeys.length;
+  const upTo = to <= today ? whole : `ถึงวันที่ ${new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })}`;
   const rules = `เข้างาน ${settings.shiftStart} เลิก ${settings.shiftEnd} · ครึ่งวัน = เข้าตั้งแต่ ${settings.lunchStart} หรือทำไม่ถึง ${settings.halfDayHours} ชม. · OT เที่ยง ${fmtMin(lunchMinutes())}/ครั้ง · OT เย็นเริ่มหลังเลิกงาน ${settings.otAfter} นาที ปัดลงทีละ ${settings.otRound} นาที`;
   const wb = new ExcelJS.Workbook();
   wb.creator = 'ระบบลงเวลาใบหน้า'; wb.created = new Date();
@@ -1965,12 +2035,12 @@ async function exportPayrollExcel(m) {
   const pp = { ...DEFAULTS.payroll, ...(settings.payroll || {}) };
   const payCols = ['ลำดับ', 'ชื่อ-นามสกุล', 'แผนก', 'ค่าแรง/วัน', 'วันทำงาน (วัน)', 'ค่าแรงปกติ', 'ทำงานวันหยุด (วัน)', `ค่าทำงานวันหยุด (${pp.holidayMult}x)`, 'OT วันทำงาน (ชม.)', `ค่า OT (${pp.otMult}x)`, 'OT วันหยุด (ชม.)', `ค่า OT วันหยุด (${pp.holidayOtMult}x)`, 'วันลาได้ค่าจ้าง', 'ค่าจ้างวันลา', 'วันหยุดนักขัตฤกษ์', 'ค่าจ้างวันหยุดนักขัตฤกษ์', 'รายได้รวม', 'หักประกันสังคม', 'รับสุทธิ', 'ลายมือชื่อผู้รับเงิน'];
   const wp = wb.addWorksheet('ค่าแรง', { views: [{ state: 'frozen', xSplit: 2, ySplit: 3 }], pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 } });
-  xlTitle(wp, `ใบสรุปค่าแรง — ${label} (${upTo})`, `ค่าจ้างรายชั่วโมง = ค่าแรง/วัน ÷ ${pp.hoursPerDay} ชม. · ประกันสังคม ${pp.sso ? `${pp.ssoRate}% ฐาน ${Number(pp.ssoMinBase).toLocaleString()}–${Number(pp.ssoMaxBase).toLocaleString()} บาท ไม่รวม OT` : 'ไม่หัก'} · ${pp.payLeave ? 'จ่ายค่าจ้างวันลาป่วย/กิจ/พักร้อนที่อนุมัติ' : 'ไม่จ่ายค่าจ้างวันลา'}`, payCols.length);
+  xlTitle(wp, `ใบสรุปค่าแรง — ${label} (${upTo})`, `ค่าจ้างรายชั่วโมง = ค่าแรง/วัน ÷ ${pp.hoursPerDay} ชม. · ประกันสังคม ${pp.sso ? `${half ? 'หักครึ่งเดือน ' : ''}${pp.ssoRate}% ฐาน ${Number(pp.ssoMinBase).toLocaleString()}–${Number(pp.ssoMaxBase).toLocaleString()} บาท ไม่รวม OT` : 'ไม่หัก'} · ${pp.payLeave ? 'จ่ายค่าจ้างวันลาป่วย/กิจ/พักร้อนที่อนุมัติ' : 'ไม่จ่ายค่าจ้างวันลา'}`, payCols.length);
   xlHeader(wp, 3, payCols);
   wp.columns = [6, 24, 12, 10, 10, 12, 10, 13, 10, 11, 10, 12, 10, 11, 10, 12, 13, 12, 13, 20].map(width => ({ width }));
   const money = new Set([4, 6, 8, 10, 12, 14, 16, 17, 18, 19]);
   employees.forEach((e, i) => {
-    const p = payrollFor(e, m);
+    const p = payrollRange(e, from, to, half);
     const row = wp.addRow([i + 1, e.name, e.dept || '', p.wage, p.workDays, p.regularPay, p.offDays, p.holidayPay, xlHours(p.otWorkMin), p.otPay, xlHours(p.otOffMin), p.otHolidayPay, p.leaveDays, p.leavePay, p.paidHolidays, p.paidHolidayPay, p.gross, p.sso, p.net, '']);
     row.height = 24;
     row.eachCell({ includeEmpty: true }, (c, n) => {
@@ -1990,7 +2060,7 @@ async function exportPayrollExcel(m) {
   wp.addRow(['', 'ตรวจสอบกับฝ่ายบัญชีก่อนจ่ายจริง · ค่าแรงคิดตามเวลาสแกน วันลาที่อนุมัติ และปฏิทินวันหยุดในระบบ']).getCell(2).font = { size: 10, color: { argb: 'FF5C6773' } };
 
   /* sheet: labour cost by station (for costing) */
-  const sc = stationCosts(m);
+  const sc = stationCostsRange(from, to);
   const ss = wb.addWorksheet('ค่าแรงตามหน้างาน', { views: [{ state: 'frozen', ySplit: 3 }], pageSetup: { orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 } });
   xlTitle(ss, `ค่าแรงตามหน้างาน — ${label} (${upTo})`, 'วันที่ย้ายหน้างาน แบ่งตามเวลาที่อยู่แต่ละหน้างาน · OT นับให้หน้างานสุดท้ายของวัน · ไม่รวมค่าจ้างวันลา/วันหยุดนักขัตฤกษ์ ยังไม่หักประกันสังคม', 5);
   xlHeader(ss, 3, ['หน้างาน', 'คน-วัน', 'ชั่วโมงทำงาน (รวม OT)', 'ค่าแรง (บาท)', 'สัดส่วน']);
@@ -2020,7 +2090,7 @@ async function exportPayrollExcel(m) {
   xlHeader(ws, 3, cols);
   ws.columns = [6, 26, 14, 11, 10, 12, 9, 10, 11, 11, 10, 10, 10, 10, 9, 9, 10, 9, 22].map(width => ({ width }));
   employees.forEach((e, i) => {
-    const r = monthSummary(e, m);
+    const r = summaryRange(e, from, to);
     const row = ws.addRow([i + 1, e.name, e.dept || '', r.workedDays, r.halfDays, r.offDayWorked, r.lateCount, r.lateMin, r.missingOut,
       xlHours(r.regularMin), r.lunchDays, xlHours(r.lunchMin), xlHours(r.otMin), xlHours(r.lunchMin + r.otMin),
       r.leave.sick, r.leave.personal, r.leave.vacation, r.leave.other, '']);
@@ -2044,9 +2114,8 @@ async function exportPayrollExcel(m) {
 
   /* sheet 2: day-by-day grid (who came when), colour-coded */
   const g = wb.addWorksheet('ตารางเวลารายวัน', { views: [{ state: 'frozen', xSplit: 2, ySplit: 4 }], pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 } });
-  const dayKeys = Array.from({ length: days }, (_, i) => `${m}-${pad(i + 1)}`);
   xlTitle(g, `ตารางเวลาเข้า-ออก รายวัน — ${label}`, 'สีเทา = วันหยุดโรงงาน · สีส้ม = มาสาย · สีแดง = ไม่สแกนออก · สีฟ้า = ลา (อนุมัติแล้ว)', days + 3);
-  xlHeader(g, 3, ['ชื่อ-นามสกุล', 'แผนก', ...dayKeys.map((k, i) => String(i + 1)), 'รวม (วัน)']);
+  xlHeader(g, 3, ['ชื่อ-นามสกุล', 'แผนก', ...dayKeys.map(k => String(Number(k.slice(8)))), 'รวม (วัน)']);
   xlHeader(g, 4, ['', '', ...dayKeys.map(k => DOW_SHORT[new Date(k + 'T00:00:00').getDay()]), '']);
   g.getRow(4).height = 18;
   dayKeys.forEach((k, i) => { if (!dayInfo(k).work) { g.getCell(3, i + 3).fill = XL.off; g.getCell(4, i + 3).fill = XL.off; g.getCell(3, i + 3).font = g.getCell(4, i + 3).font = { bold: true, color: { argb: 'FF5C6773' } }; } });
@@ -2064,7 +2133,7 @@ async function exportPayrollExcel(m) {
       if (sd.leave) return { text: LEAVE_TYPES[sd.leave.type].replace('ลา', 'ลา') + (sd.leave.part === 'full' ? '' : '½'), fill: XL.leave };
       return { text: '', fill: sd.info.work ? null : XL.off };
     });
-    const row = g.addRow([e.name, e.dept || '', ...cells.map(c => c.text), monthSummary(e, m).workedDays]);
+    const row = g.addRow([e.name, e.dept || '', ...cells.map(c => c.text), summaryRange(e, from, to).workedDays]);
     row.eachCell({ includeEmpty: true }, (c, n) => {
       c.border = XL.border; c.font = { size: 9 };
       if (n >= 3 && n <= days + 2) { c.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true }; const f = cells[n - 3].fill; if (f) c.fill = f; }
@@ -2088,9 +2157,19 @@ async function exportPayrollExcel(m) {
   d.autoFilter = { from: { row: 1, column: 1 }, to: { row: 1, column: HEAD.length } };
 
   const buf = await wb.xlsx.writeBuffer();
-  downloadFile(`เงินเดือน-${m}.xlsx`, buf, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  downloadFile(file, buf, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   return buf;
 }
+$('#pPeriod').addEventListener('change', renderPeriod);
+$('#btnExportPeriod').addEventListener('click', async () => {
+  const p = selectedPeriod(); if (!p) return;
+  const b = $('#btnExportPeriod'); b.disabled = true; const t = b.textContent; b.textContent = 'กำลังสร้างไฟล์…';
+  try {
+    await exportPayroll({ from: p.from, to: p.to, half: p.half, label: `งวด ${thShort(p.from)} – ${thShort(p.to)} (จ่าย ${thShort(p.to)})`, file: `ค่าแรง-งวด-${p.from}-ถึง-${p.to}.xlsx`, whole: 'ทั้งงวด' });
+    toast('ส่งออก Excel แล้ว', 'ok');
+  } catch (e) { toast('ส่งออก Excel ไม่สำเร็จ: ' + e.message, 'err'); }
+  b.disabled = false; b.textContent = t;
+});
 $('#btnExportExcel').addEventListener('click', async () => {
   const m = $('#rMonth').value; if (!m) return;
   const b = $('#btnExportExcel'); b.disabled = true; const t = b.textContent; b.textContent = 'กำลังสร้างไฟล์…';
@@ -2181,6 +2260,8 @@ function renderPayForm() {
   $('#pHours').value = p.hoursPerDay; $('#pOt').value = p.otMult; $('#pHol').value = p.holidayMult; $('#pHolOt').value = p.holidayOtMult;
   $('#pPayLeave').checked = !!p.payLeave; $('#pSso').checked = !!p.sso;
   $('#pSsoRate').value = p.ssoRate; $('#pSsoMin').value = p.ssoMinBase; $('#pSsoMax').value = p.ssoMaxBase;
+  const [c1, c2] = cutoffs(); $('#pCut1').value = c1; $('#pCut2').value = c2;
+  $('#pCutHelp').textContent = `งวดที่ 1: วันที่ ${c2 + 1} ถึง ${c1} ของเดือนถัดไป (จ่ายวันที่ ${c1}) · งวดที่ 2: วันที่ ${c1 + 1} ถึง ${c2} (จ่ายวันที่ ${c2}) · ประกันสังคมหักงวดละครึ่ง`;
 }
 $('#payForm').addEventListener('submit', async ev => {
   ev.preventDefault();
@@ -2188,7 +2269,10 @@ $('#payForm').addEventListener('submit', async ev => {
   const D = DEFAULTS.payroll;
   settings.payroll = { hoursPerDay: num('#pHours', D.hoursPerDay) || D.hoursPerDay, otMult: num('#pOt', D.otMult), holidayMult: num('#pHol', D.holidayMult), holidayOtMult: num('#pHolOt', D.holidayOtMult),
     payLeave: $('#pPayLeave').checked, sso: $('#pSso').checked, ssoRate: num('#pSsoRate', D.ssoRate), ssoMinBase: num('#pSsoMin', D.ssoMinBase), ssoMaxBase: num('#pSsoMax', D.ssoMaxBase) };
-  if (await saveSettings()) toast('บันทึกการคำนวณค่าแรงแล้ว', 'ok');
+  const c1 = Math.round(num('#pCut1', 5)), c2 = Math.round(num('#pCut2', 20));
+  if (c1 < 1 || c2 > 31 || c1 >= c2) { toast('วันตัดรอบต้องอยู่ระหว่าง 1–31 และวันแรกต้องน้อยกว่าวันที่สอง', 'err'); return; }
+  settings.payPeriods = { cutoffs: [c1, c2] };
+  if (await saveSettings()) { toast('บันทึกการคำนวณค่าแรงแล้ว', 'ok'); renderPayForm(); }
 });
 function renderSettings() {
   renderPayForm();
