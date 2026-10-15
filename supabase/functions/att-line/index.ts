@@ -125,7 +125,8 @@ async function dailyMessage() {
 
 /* ---------- สต๊อกใกล้หมด (ข้อมูลแอพสต๊อก + แอพผลิตใน kv_store) ----------
    เกณฑ์เดียวกับตาราง "⚠ ใกล้หมด" ในแอพสต๊อก:
-   ใย = ต่ำกว่าจุดเตือนที่ตั้งไว้ · ผ้า = ม้วนที่ยังใช้ได้ ≤ 2 · ถุงซิล/ถุงแพ็ค = เหลือ < 5 กก. · ปลอกพร้อมผลิต = ต่ำกว่าจุดเตือนของประเภทสินค้า */
+   จุดเตือนตั้งในแอพสต๊อก (v3s_alert): ใย ทุกชนิด (ใยที่ตั้งรายชนิดไว้ใช้ค่านั้นก่อน) · ผ้า ม้วนที่ยังใช้ได้ ≤ ที่ตั้ง · ถุงแพ็ค/ถุงซิล แต่ละแบบ < ที่ตั้ง
+   ปลอกพร้อมผลิต = ต่ำกว่าจุดเตือนของประเภทสินค้า · ใส่ 0 = ไม่เตือน */
 const STOCK_URL = 'https://production.winpolydesign.com/stock-app_1';
 const r2 = (n: number) => Math.round(n * 100) / 100;
 // deno-lint-ignore no-explicit-any
@@ -171,19 +172,22 @@ function availableRolls(receipts: Any[], cuts: Any[], type: string, cutBatches: 
   });
 }
 async function stockMessage(): Promise<string | null> {
-  const [fib, fab, bag, feed] = await Promise.all([kvJson('v3s_fiber'), kvJson('v3s_fabric'), kvJson('v3s_bag'), feedLists()]);
+  const [fib, fab, bag, feed, al] = await Promise.all([kvJson('v3s_fiber'), kvJson('v3s_fabric'), kvJson('v3s_bag'), feedLists(), kvJson('v3s_alert')]);
+  const T = { fiberKg: 0, fabricRolls: 2, packKg: 5, zipKg: 5, ...al };
   const lines: string[] = [];
   // ใย
-  const th = fib.th || {}, rec: Record<string, number> = {}, used: Record<string, number> = {};
+  const own = fib.th || {}, rec: Record<string, number> = {}, used: Record<string, number> = {};
   (fib.receipts || []).forEach((r: Any) => { rec[r.fiberName] = (rec[r.fiberName] || 0) + (+r.kg || 0); });
   feed.wd.forEach((w: Any) => { used[w.fiberName] = (used[w.fiberName] || 0) + (+w.kg || 0); });
-  const fiberLow = Object.keys(th).filter((n) => +th[n] > 0 && r2((rec[n] || 0) - (used[n] || 0)) < +th[n])
-    .map((n) => `• ${n} เหลือ ${r2((rec[n] || 0) - (used[n] || 0)).toLocaleString('en-US')} กก. (เตือนต่ำกว่า ${(+th[n]).toLocaleString('en-US')})`);
+  const thOf = (n: string) => +own[n] > 0 ? +own[n] : +T.fiberKg || 0;
+  const fiberLow = Object.keys(rec).sort((a, b) => a.localeCompare(b, 'th'))
+    .filter((n) => thOf(n) > 0 && r2((rec[n] || 0) - (used[n] || 0)) < thOf(n))
+    .map((n) => `• ${n} เหลือ ${r2((rec[n] || 0) - (used[n] || 0)).toLocaleString('en-US')} กก. (เตือนต่ำกว่า ${thOf(n).toLocaleString('en-US')})`);
   if (fiberLow.length) lines.push('🧶 ใย', ...fiberLow);
   // ผ้า
   const fr: Any[] = fab.receipts || [], cuts: Any[] = fab.cuts || [], cb: Any[] = fab.cutBatches || [];
   const fabLow = [...new Set(fr.map((r) => r.fabricType))].map((t) => ({ t, n: availableRolls(fr, cuts, t, cb).length }))
-    .filter((x) => x.n <= 2).map((x) => `• ${x.t} เหลือ ${x.n} ม้วน`);
+    .filter((x) => +T.fabricRolls > 0 && x.n <= +T.fabricRolls).map((x) => `• ${x.t} เหลือ ${x.n} ม้วน (เตือนไม่เกิน ${+T.fabricRolls})`);
   if (fabLow.length) lines.push('🧵 ผ้า', ...fabLow);
   // ถุง
   const wdBySack: Record<string, number> = {};
@@ -194,10 +198,10 @@ async function stockMessage(): Promise<string | null> {
     const a = agg[k] || (agg[k] = { kind: s.kind, name: s.name, kg: 0, pcs: 0 });
     a.kg += left; if (+s.weightPerBag > 0) a.pcs += Math.round(Math.max(0, left) / +s.weightPerBag);
   });
-  for (const [kind, label] of [['zip', '🛍️ ถุงซิล'], ['pack', '📦 ถุงแพ็ค']]) {
-    const low = Object.values(agg).filter((a) => a.kind === kind && r2(a.kg) < 5)
-      .map((a) => `• ${a.name} เหลือ ${r2(Math.max(0, a.kg))} กก.${a.pcs ? ` (~${a.pcs.toLocaleString('en-US')} ใบ)` : ''}`);
-    if (low.length) lines.push(label, ...low);
+  for (const [kind, label, lim] of [['zip', '🛍️ ถุงซิล', +T.zipKg || 0], ['pack', '📦 ถุงแพ็ค', +T.packKg || 0]] as [string, string, number][]) {
+    const low = Object.values(agg).filter((a) => a.kind === kind && r2(a.kg) < lim)
+      .map((a) => `• ${a.name} เหลือ ${r2(Math.max(0, a.kg)).toLocaleString('en-US')} กก.${a.pcs ? ` (~${a.pcs.toLocaleString('en-US')} ใบ)` : ''}`);
+    if (low.length) lines.push(`${label} (เตือนต่ำกว่า ${lim} กก.)`, ...low);
   }
   // ปลอกพร้อมผลิต ตามประเภทสินค้า (รับกลับจากช่าง − เบิกไปผลิต)
   const pth = fab.prodTypeTh || {};
