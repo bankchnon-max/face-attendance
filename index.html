@@ -185,6 +185,25 @@ body.role-kiosk #nav button:not([data-view="kiosk"]){display:none}
 .lv-card .grow{flex:1;min-width:0}
 .lv-card .actions{margin-top:8px}
 dialog.wide{width:min(94vw,460px)}
+.it-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)}
+.it-row:last-child{border-bottom:0}
+#printArea{display:none}
+@media print{
+  body>*:not(#printArea){display:none!important}
+  #printArea{display:block}
+  @page{size:A4;margin:10mm}
+}
+.slip{border:1px solid #333;border-radius:6px;padding:12px 16px;margin:0 0 8mm;font-size:12.5px;color:#000;background:#fff;break-inside:avoid;page-break-inside:avoid}
+.slip h3{margin:0;font-size:16px}
+.slip .meta{display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 14px;margin:6px 0 10px}
+.slip .cols{display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start}
+.slip table{width:100%;border-collapse:collapse}
+.slip th,.slip td{padding:2px 0;border:0;background:none;font-size:12.5px;color:#000;text-align:left}
+.slip th{border-bottom:1px solid #333;font-weight:700}
+.slip td.n,.slip th.n{text-align:right;white-space:nowrap}
+.slip tr.t td{border-top:1px solid #333;font-weight:700}
+.slip .net{margin-top:10px;padding:6px 10px;background:#eee;display:flex;justify-content:space-between;font-size:15px;font-weight:700}
+.slip .sign{display:flex;justify-content:space-around;margin-top:26px}
 .cam.mini{aspect-ratio:4/3;margin-bottom:10px}
 textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--surface);font:inherit;color:inherit;resize:vertical}
 .wage-in{width:110px;padding:5px 8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);text-align:right}
@@ -353,11 +372,13 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
       <div class="toolbar">
         <label class="f"><span>งวด</span><select id="pPeriod" style="min-width:300px"></select></label>
         <button class="btn primary" id="btnExportPeriod">ส่งออก Excel งวดนี้</button>
+        <button class="btn" id="btnSlips">🖨 พิมพ์สลิปทั้งหมด</button>
+        <button class="btn" id="btnDiligence">⭐ ใส่เบี้ยขยันอัตโนมัติ</button>
       </div>
       <div class="note" id="pInfo" style="margin:0 0 14px"></div>
       <div class="table-wrap">
         <table>
-          <thead><tr><th>ชื่อ</th><th>ค่าแรง/วัน</th><th>มาทำงาน (วัน)</th><th>OT</th><th>ลาได้ค่าจ้าง (วัน)</th><th>รายได้รวม (บาท)</th><th>ประกันสังคม</th><th>รับสุทธิ (บาท)</th></tr></thead>
+          <thead><tr><th>ชื่อ</th><th>ค่าแรง/วัน</th><th>มาทำงาน (วัน)</th><th>OT</th><th>ลาได้ค่าจ้าง (วัน)</th><th>เบี้ยขยัน</th><th>รายได้รวม (บาท)</th><th>ประกันสังคม</th><th>เบิกล่วงหน้า</th><th>รับสุทธิ (บาท)</th></tr></thead>
           <tbody id="pBody"></tbody>
         </table>
       </div>
@@ -574,6 +595,13 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
           <label class="f" style="flex:1;min-width:120px"><span>ฐานค่าจ้างสูงสุด (บาท)</span><input type="number" id="pSsoMax" min="0" step="1"></label>
         </div>
         <p class="small muted" style="margin:0 0 12px">ปี 2569–2571: 5% ของค่าจ้าง ฐานไม่เกิน 17,500 บาท (หักสูงสุด 875 บาท/เดือน) · คิดจากค่าจ้างเวลาปกติ ไม่รวม OT</p>
+        <h3>เบี้ยขยัน และสลิปเงินเดือน</h3>
+        <div class="range-row" style="flex-wrap:wrap">
+          <label class="f" style="flex:1;min-width:150px"><span>เบี้ยขยันต่องวด (บาท)</span><input type="number" id="pDil" min="0" step="1" placeholder="0 = ไม่มี"></label>
+          <label class="f" style="flex:2;min-width:200px"><span>ชื่อโรงงาน / บริษัท (แสดงบนสลิป)</span><input type="text" id="pCompany" maxlength="80" autocomplete="off"></label>
+        </div>
+        <label class="check"><input type="checkbox" id="pDilSso"><span>นับเบี้ยขยันเป็นค่าจ้างสำหรับหักประกันสังคม</span></label>
+        <p class="small muted" style="margin:0 0 12px">ปุ่ม "ใส่เบี้ยขยันอัตโนมัติ" (เมนู รายงาน → งวดจ่ายเงิน) ให้คนที่ในงวดนั้นมาทำงานอย่างน้อย 1 วัน ไม่มาสาย และไม่ลา (ยกเว้นลาพักร้อน) · HR แก้หรือลบรายคนได้</p>
         <h3>งวดจ่ายเงิน (เดือนละ 2 งวด)</h3>
         <div class="range-row" style="flex-wrap:wrap">
           <label class="f" style="flex:1;min-width:150px"><span>ตัดรอบ / จ่ายเงิน วันที่</span><input type="number" id="pCut1" min="1" max="31" step="1"></label>
@@ -602,6 +630,26 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
     </div>
   </section>
 </main>
+
+<dialog id="itemDlg" class="wide">
+  <h2 style="margin:0 0 2px;font-size:17px" id="itTitle"></h2>
+  <div class="muted small" style="margin-bottom:10px" id="itPeriod"></div>
+  <div id="itList"></div>
+  <form id="itForm" autocomplete="off" style="margin-top:12px">
+    <div class="range-row">
+      <label class="f" style="flex:1"><span>รายการ</span><select id="itKind"><option value="advance">เบิกล่วงหน้า (หัก)</option><option value="diligence">เบี้ยขยัน (เพิ่ม)</option></select></label>
+      <label class="f" style="flex:1"><span>วันที่</span><input type="date" id="itDay" required></label>
+    </div>
+    <div class="range-row">
+      <label class="f" style="flex:1"><span>จำนวนเงิน (บาท)</span><input type="number" id="itAmount" min="1" max="999999" step="0.01" inputmode="decimal" required></label>
+      <label class="f" style="flex:1"><span>หมายเหตุ</span><input type="text" id="itNote" maxlength="200"></label>
+    </div>
+    <div class="actions" style="justify-content:flex-end">
+      <button type="button" class="btn" id="itClose">ปิด</button>
+      <button type="submit" class="btn primary">เพิ่มรายการ</button>
+    </div>
+  </form>
+</dialog>
 
 <dialog id="manualDlg">
   <form method="dialog" id="manualForm">
@@ -706,7 +754,7 @@ const DEFAULTS = {
   shiftStart: '08:30', shiftEnd: '17:30', grace: 5, cooldown: 60, threshold: 0.5, liveness: true, sound: true, voice: true,
   workDays: [1, 2, 3, 4, 5, 6], leaveQuota: { sick: 30, personal: 3, vacation: 6 }, lunchStart: '12:00', lunchEnd: '13:00', lunchScan: true, otAfter: 30, otRound: 30, halfDayHours: 5,
   payPeriods: { cutoffs: [5, 20] },
-  payroll: { hoursPerDay: 8, otMult: 1.5, holidayMult: 2, holidayOtMult: 3, payLeave: true, sso: true, ssoRate: 5, ssoMinBase: 1650, ssoMaxBase: 17500 },
+  payroll: { hoursPerDay: 8, otMult: 1.5, holidayMult: 2, holidayOtMult: 3, payLeave: true, sso: true, ssoRate: 5, ssoMinBase: 1650, ssoMaxBase: 17500, diligence: 0, diligenceSso: true },
   // หน้างานที่ให้เลือกตอนสแกนเข้างาน (ใช้แบ่งค่าแรงลงต้นทุนในแอพต้นทุน)
   stationPick: true, stationWait: 15,
   stations: [{ id: 'cut', icon: '✂️', name: 'ตัดผ้า' }, { id: 'line', icon: '🏭', name: 'ไลน์' }, { id: 'picnic', icon: '🧺', name: 'แพ็คปิกนิก' }, { id: 'other', icon: '📦', name: 'อื่นๆ' }]
@@ -715,6 +763,9 @@ let employees = [];
 let events = [];      // only the months that have been loaded (see ensureMonth)
 let settings = { ...DEFAULTS };
 let wages = {};       // emp_id -> daily wage (HR only)
+let payItems = [];    // diligence allowance (+) and salary advances (−), counted in the pay period of their day (HR only)
+const itemFromRow = r => ({ id: r.id, empId: r.emp_id, day: r.day, kind: r.kind, amount: Number(r.amount), note: r.note || '' });
+const ITEM_KIND = { diligence: 'เบี้ยขยัน', advance: 'เบิกล่วงหน้า' };
 let leaves = [];      // leave requests (HR only; the kiosk can file but not read them)
 let calendar = {};    // { 'YYYY-MM-DD': { type: 'work'|'off', note } } overrides the weekly pattern
 let currentUser = null;
@@ -774,18 +825,20 @@ function needData(months, snapDay, rerender) {
   if (waits.length) Promise.all(waits).then(rs => { if (rs.some(Boolean)) rerender(); });
 }
 async function loadAll() {
-  const [emps, cal, set, lv, wg] = await Promise.all([
+  const [emps, cal, set, lv, wg, pi] = await Promise.all([
     fetchAll(() => sb.from('att_employees').select('*').order('name')),
     fetchAll(() => sb.from('att_calendar').select('*')),
     sb.from('att_settings').select('data').eq('id', 1).maybeSingle(),
     currentRole === 'hr' ? fetchAll(() => sb.from('att_leaves').select('*').order('start_date')) : Promise.resolve([]),
-    currentRole === 'hr' ? fetchAll(() => sb.from('att_wages').select('emp_id, daily_wage')) : Promise.resolve([])
+    currentRole === 'hr' ? fetchAll(() => sb.from('att_wages').select('emp_id, daily_wage')) : Promise.resolve([]),
+    currentRole === 'hr' ? fetchAll(() => sb.from('att_pay_items').select('id, emp_id, day, kind, amount, note').order('day')) : Promise.resolve([])
   ]);
   if (set.error) throw set.error;
   employees = emps.map(empFromRow);
   calendar = Object.fromEntries(cal.map(r => [r.day, { type: r.type, note: r.note || '', paid: !!r.paid }]));
   wages = Object.fromEntries(wg.map(r => [r.emp_id, Number(r.daily_wage)]));
   leaves = lv.map(leaveFromRow);
+  payItems = pi.map(itemFromRow);
   settings = { ...DEFAULTS, ...(set.data?.data || {}) };
   settings.payroll = { ...DEFAULTS.payroll, ...(set.data?.data?.payroll || {}) };
   const today = dayKey(Date.now());
@@ -884,6 +937,11 @@ function subscribeRealtime() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'att_wages' }, p => {
       if (p.eventType === 'DELETE') delete wages[p.old.emp_id]; else wages[p.new.emp_id] = Number(p.new.daily_wage);
       refreshView();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'att_pay_items' }, p => {
+      payItems = payItems.filter(x => x.id !== (p.old?.id || p.new?.id));
+      if (p.eventType !== 'DELETE') payItems.push(itemFromRow(p.new));
+      refreshView(); if ($('#itemDlg').open) renderItems();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'att_settings' }, p => {
       if (p.new?.data) { settings = { ...DEFAULTS, ...p.new.data, payroll: { ...DEFAULTS.payroll, ...(p.new.data.payroll || {}) } }; buildMatcher(); refreshView(); }
@@ -1043,12 +1101,15 @@ function payrollRange(emp, from, to, ssoHalf = 0) {
   r.otHolidayPay = baht(r.otOffMin / 60 * hourly * p.holidayOtMult);
   r.leavePay = baht(r.leaveDays * wage);
   r.paidHolidayPay = baht(r.paidHolidays * wage);
-  r.gross = baht(r.regularPay + r.holidayPay + r.otPay + r.otHolidayPay + r.leavePay + r.paidHolidayPay);
+  r.items = payItems.filter(x => x.empId === emp.id && x.day >= from && x.day <= to).sort((a, b) => a.day.localeCompare(b.day));
+  const sumKind = k => baht(r.items.filter(x => x.kind === k).reduce((a, x) => a + x.amount, 0));
+  r.diligence = sumKind('diligence'); r.advance = sumKind('advance');
+  r.gross = baht(r.regularPay + r.holidayPay + r.otPay + r.otHolidayPay + r.leavePay + r.paidHolidayPay + r.diligence);
   const part = ssoHalf ? 2 : 1;
-  const ssoBase = Math.min(Number(p.ssoMaxBase) / part, Math.max(Number(p.ssoMinBase) / part, r.regularPay + r.holidayPay + r.leavePay + r.paidHolidayPay));
+  const ssoBase = Math.min(Number(p.ssoMaxBase) / part, Math.max(Number(p.ssoMinBase) / part, r.regularPay + r.holidayPay + r.leavePay + r.paidHolidayPay + (p.diligenceSso ? r.diligence : 0)));
   const ssoRaw = ssoBase * Number(p.ssoRate) / 100;
   r.sso = p.sso && wage > 0 && r.gross > 0 ? (ssoHalf === 1 ? Math.ceil(ssoRaw - 0.5) : Math.round(ssoRaw)) : 0;
-  r.net = baht(r.gross - r.sso);
+  r.net = baht(r.gross - r.sso - r.advance);   // a large advance can make this negative: shown so HR sees it
   return r;
 }
 const fmtBaht = n => n ? n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-';
@@ -1134,16 +1195,17 @@ function renderPeriod() {
   if (list.some(p => p.id === keep)) $('#pPeriod').value = keep;
   const p = selectedPeriod(); if (!p) return;
   needData([...new Set([p.from.slice(0, 7), p.to.slice(0, 7)])], null, renderPeriod);
-  let tot = { gross: 0, sso: 0, net: 0 };
+  const tot = { diligence: 0, gross: 0, sso: 0, advance: 0, net: 0 };
   $('#pBody').innerHTML = employees.length ? employees.map(e => {
     const r = payrollRange(e, p.from, p.to, p.half);
-    tot.gross += r.gross; tot.sso += r.sso; tot.net += r.net;
-    return `<tr><td>${esc(e.name)}</td><td class="num">${r.wage ? fmtBaht(r.wage) : '<span class="small muted">ยังไม่ใส่</span>'}</td>
+    for (const k in tot) tot[k] += r[k];
+    return `<tr><td>${esc(e.name)}<div style="margin-top:4px;white-space:nowrap"><button class="btn sm" data-items="${e.id}">เบิก / เบี้ยขยัน</button> <button class="btn sm" data-slip="${e.id}">🖨 สลิป</button></div></td><td class="num">${r.wage ? fmtBaht(r.wage) : '<span class="small muted">ยังไม่ใส่</span>'}</td>
       <td class="num">${fmtDays(r.workDays + r.offDays)}</td><td class="num">${r.otWorkMin + r.otOffMin ? fmtMin(r.otWorkMin + r.otOffMin) : '-'}</td>
-      <td class="num">${r.leaveDays ? fmtDays(r.leaveDays) : '-'}</td>
-      <td class="num">${fmtBaht(r.gross)}</td><td class="num">${fmtBaht(r.sso)}</td><td class="num"><b>${fmtBaht(r.net)}</b></td></tr>`;
-  }).join('') + `<tr><td><b>รวม</b></td><td></td><td></td><td></td><td></td><td class="num"><b>${fmtBaht(baht(tot.gross))}</b></td><td class="num"><b>${fmtBaht(tot.sso)}</b></td><td class="num"><b>${fmtBaht(baht(tot.net))}</b></td></tr>`
-    : '<tr><td colspan="8" class="empty">ยังไม่มีพนักงาน</td></tr>';
+      <td class="num">${r.leaveDays ? fmtDays(r.leaveDays) : '-'}</td><td class="num">${fmtBaht(r.diligence)}</td>
+      <td class="num">${fmtBaht(r.gross)}</td><td class="num">${fmtBaht(r.sso)}</td><td class="num">${r.advance ? '−' + fmtBaht(r.advance) : '-'}</td>
+      <td class="num"${r.net < 0 ? ' style="color:var(--err)"' : ''}><b>${fmtBaht(r.net)}</b></td></tr>`;
+  }).join('') + `<tr><td><b>รวม</b></td><td></td><td></td><td></td><td></td><td class="num"><b>${fmtBaht(baht(tot.diligence))}</b></td><td class="num"><b>${fmtBaht(baht(tot.gross))}</b></td><td class="num"><b>${fmtBaht(tot.sso)}</b></td><td class="num"><b>${tot.advance ? '−' + fmtBaht(baht(tot.advance)) : '-'}</b></td><td class="num"><b>${fmtBaht(baht(tot.net))}</b></td></tr>`
+    : '<tr><td colspan="10" class="empty">ยังไม่มีพนักงาน</td></tr>';
   $('#pInfo').textContent = p.open ? 'งวดนี้ยังไม่ปิด ตัวเลขนับถึงวันนี้ · ประกันสังคมหักครึ่งหนึ่งของเดือน' : 'ประกันสังคมหักครึ่งหนึ่งของเดือน (งวดละไม่เกิน ' + fmtBaht(Number((settings.payroll || DEFAULTS.payroll).ssoMaxBase) * Number((settings.payroll || DEFAULTS.payroll).ssoRate) / 200) + ' บาท)';
 }
 const stationName = id => id ? stationLabel(id) : '— ไม่ระบุ —';
@@ -2035,31 +2097,44 @@ async function exportPayroll({ from, to, half, label, file, whole }) {
 
   /* sheet 0: pay, one row per employee, with a signature column */
   const pp = { ...DEFAULTS.payroll, ...(settings.payroll || {}) };
-  const payCols = ['ลำดับ', 'ชื่อ-นามสกุล', 'แผนก', 'ค่าแรง/วัน', 'วันทำงาน (วัน)', 'ค่าแรงปกติ', 'ทำงานวันหยุด (วัน)', `ค่าทำงานวันหยุด (${pp.holidayMult}x)`, 'OT วันทำงาน (ชม.)', `ค่า OT (${pp.otMult}x)`, 'OT วันหยุด (ชม.)', `ค่า OT วันหยุด (${pp.holidayOtMult}x)`, 'วันลาได้ค่าจ้าง', 'ค่าจ้างวันลา', 'วันหยุดนักขัตฤกษ์', 'ค่าจ้างวันหยุดนักขัตฤกษ์', 'รายได้รวม', 'หักประกันสังคม', 'รับสุทธิ', 'ลายมือชื่อผู้รับเงิน'];
+  const payCols = ['ลำดับ', 'ชื่อ-นามสกุล', 'แผนก', 'ค่าแรง/วัน', 'วันทำงาน (วัน)', 'ค่าแรงปกติ', 'ทำงานวันหยุด (วัน)', `ค่าทำงานวันหยุด (${pp.holidayMult}x)`, 'OT วันทำงาน (ชม.)', `ค่า OT (${pp.otMult}x)`, 'OT วันหยุด (ชม.)', `ค่า OT วันหยุด (${pp.holidayOtMult}x)`, 'วันลาได้ค่าจ้าง', 'ค่าจ้างวันลา', 'วันหยุดนักขัตฤกษ์', 'ค่าจ้างวันหยุดนักขัตฤกษ์', 'เบี้ยขยัน', 'รายได้รวม', 'หักประกันสังคม', 'หักเบิกล่วงหน้า', 'รับสุทธิ', 'ลายมือชื่อผู้รับเงิน'];
   const wp = wb.addWorksheet('ค่าแรง', { views: [{ state: 'frozen', xSplit: 2, ySplit: 3 }], pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 } });
   xlTitle(wp, `ใบสรุปค่าแรง — ${label} (${upTo})`, `ค่าจ้างรายชั่วโมง = ค่าแรง/วัน ÷ ${pp.hoursPerDay} ชม. · ประกันสังคม ${pp.sso ? `${half ? 'หักครึ่งเดือน ' : ''}${pp.ssoRate}% ฐาน ${Number(pp.ssoMinBase).toLocaleString()}–${Number(pp.ssoMaxBase).toLocaleString()} บาท ไม่รวม OT` : 'ไม่หัก'} · ${pp.payLeave ? 'จ่ายค่าจ้างวันลาป่วย/กิจ/พักร้อนที่อนุมัติ' : 'ไม่จ่ายค่าจ้างวันลา'}`, payCols.length);
   xlHeader(wp, 3, payCols);
-  wp.columns = [6, 24, 12, 10, 10, 12, 10, 13, 10, 11, 10, 12, 10, 11, 10, 12, 13, 12, 13, 20].map(width => ({ width }));
-  const money = new Set([4, 6, 8, 10, 12, 14, 16, 17, 18, 19]);
+  wp.columns = [6, 24, 12, 10, 10, 12, 10, 13, 10, 11, 10, 12, 10, 11, 10, 12, 11, 13, 12, 12, 13, 20].map(width => ({ width }));
+  const money = new Set([4, 6, 8, 10, 12, 14, 16, 17, 18, 19, 20, 21]);
   employees.forEach((e, i) => {
     const p = payrollRange(e, from, to, half);
-    const row = wp.addRow([i + 1, e.name, e.dept || '', p.wage, p.workDays, p.regularPay, p.offDays, p.holidayPay, xlHours(p.otWorkMin), p.otPay, xlHours(p.otOffMin), p.otHolidayPay, p.leaveDays, p.leavePay, p.paidHolidays, p.paidHolidayPay, p.gross, p.sso, p.net, '']);
+    const row = wp.addRow([i + 1, e.name, e.dept || '', p.wage, p.workDays, p.regularPay, p.offDays, p.holidayPay, xlHours(p.otWorkMin), p.otPay, xlHours(p.otOffMin), p.otHolidayPay, p.leaveDays, p.leavePay, p.paidHolidays, p.paidHolidayPay, p.diligence, p.gross, p.sso, p.advance, p.net, '']);
     row.height = 24;
     row.eachCell({ includeEmpty: true }, (c, n) => {
-      c.border = XL.border; c.alignment = { vertical: 'middle', horizontal: n >= 4 && n <= 19 ? 'right' : 'left' };
+      c.border = XL.border; c.alignment = { vertical: 'middle', horizontal: n >= 4 && n <= 21 ? 'right' : 'left' };
       if (money.has(n)) c.numFmt = '#,##0.00;-#,##0.00;"-"';
       else if (n >= 5 && n <= 15) c.numFmt = '0.0#;-0.0#;"-"';
     });
-    row.getCell(19).font = { bold: true };
+    row.getCell(21).font = { bold: true };
     if (!p.wage) { row.getCell(4).fill = XL.miss; row.getCell(4).value = 'ยังไม่ใส่'; }
   });
   if (employees.length) {
     const last = 3 + employees.length, colL = n => String.fromCharCode(64 + n);
-    const tr = wp.addRow(['', 'รวม', '', ...payCols.slice(3, 19).map((_, i) => [4].includes(i + 4) ? '' : { formula: `SUM(${colL(i + 4)}4:${colL(i + 4)}${last})` }), '']);
+    const tr = wp.addRow(['', 'รวม', '', ...payCols.slice(3, 21).map((_, i) => [4].includes(i + 4) ? '' : { formula: `SUM(${colL(i + 4)}4:${colL(i + 4)}${last})` }), '']);
     tr.eachCell({ includeEmpty: true }, (c, n) => { c.font = { bold: true }; c.fill = XL.total; c.border = XL.border; if (money.has(n)) c.numFmt = '#,##0.00'; else if (n >= 5 && n <= 15) c.numFmt = '0.0#;-0.0#;"-"'; });
   }
   wp.addRow([]);
-  wp.addRow(['', 'ตรวจสอบกับฝ่ายบัญชีก่อนจ่ายจริง · ค่าแรงคิดตามเวลาสแกน วันลาที่อนุมัติ และปฏิทินวันหยุดในระบบ']).getCell(2).font = { size: 10, color: { argb: 'FF5C6773' } };
+  wp.addRow(['', 'รับสุทธิ = รายได้รวม − ประกันสังคม − เบิกล่วงหน้า · ตรวจสอบกับฝ่ายบัญชีก่อนจ่ายจริง · ค่าแรงคิดตามเวลาสแกน วันลาที่อนุมัติ และปฏิทินวันหยุดในระบบ']).getCell(2).font = { size: 10, color: { argb: 'FF5C6773' } };
+
+  /* sheet: advances and diligence lines in the range */
+  const its = payItems.filter(x => x.day >= from && x.day <= to && empById(x.empId)).sort((a, b) => a.day.localeCompare(b.day) || empById(a.empId).name.localeCompare(empById(b.empId).name, 'th'));
+  if (its.length) {
+    const wi = wb.addWorksheet('เบิกล่วงหน้า-เบี้ยขยัน', { views: [{ state: 'frozen', ySplit: 3 }], pageSetup: { orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0, paperSize: 9 } });
+    xlTitle(wi, `เบิกล่วงหน้า / เบี้ยขยัน — ${label}`, 'เบี้ยขยันบวกเข้ารายได้ · เบิกล่วงหน้าหักจากยอดรับสุทธิ', 5);
+    xlHeader(wi, 3, ['วันที่', 'ชื่อ-นามสกุล', 'รายการ', 'จำนวนเงิน (บาท)', 'หมายเหตุ']);
+    wi.columns = [14, 24, 14, 16, 30].map(width => ({ width }));
+    its.forEach(x => {
+      const row = wi.addRow([new Date(x.day + 'T00:00:00').toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: 'numeric' }), empById(x.empId).name, ITEM_KIND[x.kind], x.kind === 'advance' ? -x.amount : x.amount, x.note]);
+      row.eachCell({ includeEmpty: true }, (c, n) => { c.border = XL.border; if (n === 4) c.numFmt = '#,##0.00;-#,##0.00'; });
+    });
+  }
 
   /* sheet: labour cost by station (for costing) */
   const sc = stationCostsRange(from, to);
@@ -2163,6 +2238,98 @@ async function exportPayroll({ from, to, half, label, file, whole }) {
   return buf;
 }
 $('#pPeriod').addEventListener('change', renderPeriod);
+let itemEmp = null;
+const itemsIn = (empId, p) => payItems.filter(x => x.empId === empId && x.day >= p.from && x.day <= p.to).sort((a, b) => a.day.localeCompare(b.day));
+function renderItems() {
+  const p = selectedPeriod(), list = p ? itemsIn(itemEmp, p) : [];
+  $('#itList').innerHTML = list.length ? list.map(x => `<div class="it-row"><span class="badge ${x.kind === 'advance' ? 'b-warn' : 'b-ok'}">${ITEM_KIND[x.kind]}</span>
+    <div style="flex:1">${thShort(x.day)}${x.note ? ` · <span class="muted">${esc(x.note)}</span>` : ''}</div>
+    <b>${x.kind === 'advance' ? '−' : '+'}${fmtBaht(x.amount)}</b><button type="button" class="btn sm danger" data-itdel="${x.id}">ลบ</button></div>`).join('')
+    : '<div class="empty">ยังไม่มีรายการในงวดนี้</div>';
+}
+function openItems(empId) {
+  const p = selectedPeriod(), e = empById(empId); if (!p || !e) return;
+  itemEmp = empId;
+  $('#itTitle').textContent = e.name;
+  $('#itPeriod').textContent = 'งวด ' + periodLabel(p);
+  const today = dayKey(Date.now());
+  $('#itDay').min = p.from; $('#itDay').max = p.to; $('#itDay').value = today < p.from ? p.from : today > p.to ? p.to : today;
+  $('#itAmount').value = ''; $('#itNote').value = ''; $('#itKind').value = 'advance';
+  renderItems(); $('#itemDlg').showModal();
+}
+async function addItems(rows, okMsg) {
+  if (!(await dbCall(sb.from('att_pay_items').insert(rows), okMsg))) return false;
+  const ids = new Set(rows.map(r => r.id));
+  payItems = [...payItems.filter(x => !ids.has(x.id)), ...rows.map(itemFromRow)];
+  renderPeriod(); if ($('#itemDlg').open) renderItems();
+  return true;
+}
+$('#itForm').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  const amount = Math.round(Number($('#itAmount').value) * 100) / 100, day = $('#itDay').value, p = selectedPeriod();
+  if (!(amount > 0)) { toast('ใส่จำนวนเงินให้ถูกต้อง', 'err'); return; }
+  if (!day || day < p.from || day > p.to) { toast('วันที่ต้องอยู่ในงวดนี้', 'err'); return; }
+  const kind = $('#itKind').value;
+  if (await addItems([{ id: uid(), emp_id: itemEmp, day, kind, amount, note: $('#itNote').value.trim() || null }], `เพิ่ม${ITEM_KIND[kind]}แล้ว`)) { $('#itAmount').value = ''; $('#itNote').value = ''; }
+});
+$('#itList').addEventListener('click', async e => {
+  const b = e.target.closest('[data-itdel]'); if (!b) return;
+  const x = payItems.find(i => i.id === b.dataset.itdel); if (!x) return;
+  if (!confirm(`ลบ${ITEM_KIND[x.kind]} ${fmtBaht(x.amount)} บาท (${thShort(x.day)})?`)) return;
+  if (await dbCall(sb.from('att_pay_items').delete().eq('id', x.id), 'ลบรายการแล้ว')) { payItems = payItems.filter(i => i.id !== x.id); renderItems(); renderPeriod(); }
+});
+$('#itClose').addEventListener('click', () => $('#itemDlg').close());
+// Diligence: worked at least one day in the period, never late, no leave other than vacation
+function earnsDiligence(emp, p) {
+  const today = dayKey(Date.now()); let worked = 0;
+  for (const key of keysBetween(p.from, p.to)) {
+    if (key > today) break;
+    const s = daySummary(emp, key);
+    if (s.late || (s.leave && s.leave.type !== 'vacation')) return false;
+    if (s.present) worked++;
+  }
+  return worked > 0;
+}
+$('#btnDiligence').addEventListener('click', async () => {
+  const p = selectedPeriod(); if (!p) return;
+  const amount = Number(settings.payroll?.diligence || 0);
+  if (!amount) { toast('ตั้งจำนวนเบี้ยขยันก่อน ที่ ตั้งค่า → การคำนวณค่าแรง', 'err'); return; }
+  await Promise.all([...new Set([p.from.slice(0, 7), p.to.slice(0, 7)])].map(ensureMonth));
+  const has = new Set(payItems.filter(x => x.kind === 'diligence' && x.day >= p.from && x.day <= p.to).map(x => x.empId));
+  const get = employees.filter(e => !has.has(e.id) && earnsDiligence(e, p));
+  if (!get.length) { toast(has.size ? 'ทุกคนที่ได้เบี้ยขยันมีรายการแล้ว' : 'ไม่มีใครเข้าเงื่อนไขเบี้ยขยันในงวดนี้'); return; }
+  if (!confirm(`${p.open ? '⚠ งวดนี้ยังไม่ปิด — คนที่มาสาย/ลาหลังจากนี้ต้องลบเบี้ยขยันเอง\n\n' : ''}ใส่เบี้ยขยัน ${fmtBaht(amount)} บาท ให้ ${get.length} คน:\n${get.map(e => '• ' + e.name).join('\n')}`)) return;
+  addItems(get.map(e => ({ id: uid(), emp_id: e.id, day: p.to, kind: 'diligence', amount, note: 'อัตโนมัติ' })), `ใส่เบี้ยขยันให้ ${get.length} คนแล้ว`);
+});
+function slipHtml(e, p) {
+  const r = payrollRange(e, p.from, p.to, p.half);
+  const line = ([t, v]) => `<tr><td>${t}</td><td class="n">${fmtBaht(v)}</td></tr>`;
+  const inc = [[`ค่าแรงปกติ ${fmtDays(r.workDays)} วัน × ${fmtBaht(r.wage)}`, r.regularPay], [`ทำงานวันหยุด ${fmtDays(r.offDays)} วัน`, r.holidayPay],
+    [`OT ${fmtMin(r.otWorkMin)}`, r.otPay], [`OT วันหยุด ${fmtMin(r.otOffMin)}`, r.otHolidayPay], [`ค่าจ้างวันลา ${fmtDays(r.leaveDays)} วัน`, r.leavePay],
+    [`วันหยุดนักขัตฤกษ์ ${r.paidHolidays} วัน`, r.paidHolidayPay], ['เบี้ยขยัน', r.diligence]].filter(([, v]) => v);
+  const ded = [['ประกันสังคม', r.sso], ...r.items.filter(x => x.kind === 'advance').map(x => [`เบิกล่วงหน้า ${thShort(x.day)}${x.note ? ' · ' + esc(x.note) : ''}`, x.amount])].filter(([, v]) => v);
+  return `<div class="slip"><h3>${esc(settings.companyName || 'ใบจ่ายค่าจ้าง')}</h3>
+    <div class="meta"><span>${settings.companyName ? 'ใบจ่ายค่าจ้าง · ' : ''}<b>${esc(e.name)}</b>${e.dept ? ' · ' + esc(e.dept) : ''}</span><span>งวด ${thShort(p.from)} – ${thShort(p.to)} · วันที่จ่าย ${thShort(p.to)}</span></div>
+    <div class="cols">
+      <table><tr><th>รายได้</th><th class="n">บาท</th></tr>${inc.map(line).join('') || '<tr><td>-</td><td class="n">-</td></tr>'}<tr class="t"><td>รวมรายได้</td><td class="n">${fmtBaht(r.gross)}</td></tr></table>
+      <table><tr><th>รายการหัก</th><th class="n">บาท</th></tr>${ded.map(line).join('') || '<tr><td>-</td><td class="n">-</td></tr>'}<tr class="t"><td>รวมรายการหัก</td><td class="n">${fmtBaht(baht(r.sso + r.advance))}</td></tr></table>
+    </div>
+    <div class="net"><span>รับสุทธิ</span><span>${fmtBaht(r.net)} บาท</span></div>
+    <div class="sign"><span>ลงชื่อ ........................................ ผู้จ่ายเงิน</span><span>ลงชื่อ ........................................ ผู้รับเงิน</span></div></div>`;
+}
+async function printSlips(list) {
+  const p = selectedPeriod(); if (!p) return;
+  await Promise.all([...new Set([p.from.slice(0, 7), p.to.slice(0, 7)])].map(ensureMonth));
+  const rows = list.filter(e => { const r = payrollRange(e, p.from, p.to, p.half); return r.gross || r.advance; });
+  if (!rows.length) { toast('งวดนี้ยังไม่มีใครมีรายได้', 'err'); return; }
+  $('#printArea').innerHTML = rows.map(e => slipHtml(e, p)).join('');
+  window.print();
+}
+$('#btnSlips').addEventListener('click', () => printSlips(employees));
+$('#pBody').addEventListener('click', e => {
+  const it = e.target.closest('[data-items]'); if (it) return openItems(it.dataset.items);
+  const sl = e.target.closest('[data-slip]'); if (sl) { const emp = empById(sl.dataset.slip); if (emp) printSlips([emp]); }
+});
 $('#btnExportPeriod').addEventListener('click', async () => {
   const p = selectedPeriod(); if (!p) return;
   const b = $('#btnExportPeriod'); b.disabled = true; const t = b.textContent; b.textContent = 'กำลังสร้างไฟล์…';
@@ -2262,6 +2429,7 @@ function renderPayForm() {
   $('#pHours').value = p.hoursPerDay; $('#pOt').value = p.otMult; $('#pHol').value = p.holidayMult; $('#pHolOt').value = p.holidayOtMult;
   $('#pPayLeave').checked = !!p.payLeave; $('#pSso').checked = !!p.sso;
   $('#pSsoRate').value = p.ssoRate; $('#pSsoMin').value = p.ssoMinBase; $('#pSsoMax').value = p.ssoMaxBase;
+  $('#pDil').value = p.diligence || ''; $('#pDilSso').checked = !!p.diligenceSso; $('#pCompany').value = settings.companyName || '';
   const [c1, c2] = cutoffs(); $('#pCut1').value = c1; $('#pCut2').value = c2;
   $('#pCutHelp').textContent = `งวดที่ 1: วันที่ ${c2 + 1} ถึง ${c1} ของเดือนถัดไป (จ่ายวันที่ ${c1}) · งวดที่ 2: วันที่ ${c1 + 1} ถึง ${c2} (จ่ายวันที่ ${c2}) · ประกันสังคมหักงวดละครึ่ง`;
 }
@@ -2270,7 +2438,9 @@ $('#payForm').addEventListener('submit', async ev => {
   const num = (id, d) => { const v = Number($(id).value); return Number.isFinite(v) && v >= 0 ? v : d; };
   const D = DEFAULTS.payroll;
   settings.payroll = { hoursPerDay: num('#pHours', D.hoursPerDay) || D.hoursPerDay, otMult: num('#pOt', D.otMult), holidayMult: num('#pHol', D.holidayMult), holidayOtMult: num('#pHolOt', D.holidayOtMult),
-    payLeave: $('#pPayLeave').checked, sso: $('#pSso').checked, ssoRate: num('#pSsoRate', D.ssoRate), ssoMinBase: num('#pSsoMin', D.ssoMinBase), ssoMaxBase: num('#pSsoMax', D.ssoMaxBase) };
+    payLeave: $('#pPayLeave').checked, sso: $('#pSso').checked, ssoRate: num('#pSsoRate', D.ssoRate), ssoMinBase: num('#pSsoMin', D.ssoMinBase), ssoMaxBase: num('#pSsoMax', D.ssoMaxBase),
+    diligence: num('#pDil', 0), diligenceSso: $('#pDilSso').checked };
+  settings.companyName = $('#pCompany').value.trim().slice(0, 80);
   const c1 = Math.round(num('#pCut1', 5)), c2 = Math.round(num('#pCut2', 20));
   if (c1 < 1 || c2 > 31 || c1 >= c2) { toast('วันตัดรอบต้องอยู่ระหว่าง 1–31 และวันแรกต้องน้อยกว่าวันที่สอง', 'err'); return; }
   settings.payPeriods = { cutoffs: [c1, c2] };
@@ -2301,13 +2471,14 @@ $('#settingsForm').addEventListener('submit', ev => {
 $('#btnBackup').addEventListener('click', async () => {
   toast('กำลังเตรียมไฟล์สำรอง…');
   try {
-    const [emps, evs, lvs] = await Promise.all([
+    const [emps, evs, lvs, pis] = await Promise.all([
       fetchAll(() => sb.from('att_employees').select('*').order('name')),
       fetchAll(() => sb.from('att_leaves').select('id,emp_id,type,start_date,end_date,part,reason,status,source,requested_at,decided_by,decided_at,decision_note')),
-      fetchAll(() => sb.from('att_events').select('id,emp_id,time,type,score,live,source,station').order('time'))
+      fetchAll(() => sb.from('att_events').select('id,emp_id,time,type,score,live,source,station').order('time')),
+      fetchAll(() => sb.from('att_pay_items').select('id,emp_id,day,kind,amount,note,created_at,created_by').order('day'))
     ]);
     const leavesBackup = lvs;
-    downloadFile(`face-attendance-backup-${dayKey(Date.now())}.json`, JSON.stringify({ version: 3, exportedAt: new Date().toISOString(), employees: emps.map(empFromRow), events: evs.map(evFromRow), leaves: leavesBackup, wages, settings, calendar }), 'application/json');
+    downloadFile(`face-attendance-backup-${dayKey(Date.now())}.json`, JSON.stringify({ version: 3, exportedAt: new Date().toISOString(), employees: emps.map(empFromRow), events: evs.map(evFromRow), leaves: leavesBackup, wages, payItems: pis, settings, calendar }), 'application/json');
   } catch (e) { toast('สำรองข้อมูลไม่สำเร็จ: ' + e.message, 'err'); }
 });
 async function reloadData() {
@@ -2325,6 +2496,7 @@ $('#fileImport').addEventListener('change', async ev => {
     await up('att_employees', data.employees.map(empToRow));
     await up('att_events', data.events.map(e => evToRow({ ...e, snap: null })));
     if (Array.isArray(data.leaves)) await up('att_leaves', data.leaves);
+    if (Array.isArray(data.payItems)) await up('att_pay_items', data.payItems);
     if (data.wages) await up('att_wages', Object.entries(data.wages).map(([emp_id, daily_wage]) => ({ emp_id, daily_wage })));
     await up('att_calendar', Object.entries(data.calendar || {}).map(([day, o]) => ({ day, type: o.type === 'off' ? 'off' : 'work', note: o.note || null, paid: o.type === 'off' && !!o.paid })));
     if (data.settings) { settings = { ...DEFAULTS, ...data.settings }; await saveSettings(); }
@@ -2871,5 +3043,6 @@ try { $('#btnHub').hidden = !localStorage.getItem('wpd_auth_hub'); } catch {}
 })();
 
 </script>
+<div id="printArea"></div>
 </body>
 </html>

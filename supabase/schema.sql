@@ -1,5 +1,5 @@
 -- Face attendance app schema (applied to Supabase as migrations
--- att_face_attendance_schema + att_move_is_staff_to_private_schema + att_drop_employee_code + att_roles_hr_and_kiosk + att_split_write_policies_and_snap_retention + att_leaves + att_wages_and_paid_holidays + att_line_notifications + att_events_station_move).
+-- att_face_attendance_schema + att_move_is_staff_to_private_schema + att_drop_employee_code + att_roles_hr_and_kiosk + att_split_write_policies_and_snap_retention + att_leaves + att_wages_and_paid_holidays + att_line_notifications + att_events_station_move + att_pay_items).
 -- Roles: hr = everything; kiosk = read what scanning needs + add scans only.
 -- Only users listed in att_staff can read or write anything.
 
@@ -194,3 +194,24 @@ revoke all on public.att_line_config, public.att_line_targets from anon, authent
 -- att_private.notify_line_leave(): trigger after insert on att_leaves (pending) -> POST {type:'leave'} to att-line
 -- att_private.send_line_daily(): pg_cron 'att-line-daily-summary' at 14:00 UTC (21:00 Thailand) -> POST {type:'daily'}
 -- both send the x-internal-secret header from att_line_config; see the migration for the full function bodies.
+
+-- Extra pay lines (migration att_pay_items): diligence allowance (added to pay) and salary advances (deducted).
+-- A line belongs to the pay period that contains its day. HR only.
+create table public.att_pay_items (
+  id uuid primary key default gen_random_uuid(),
+  emp_id text not null,
+  day date not null,
+  kind text not null check (kind in ('diligence', 'advance')),
+  amount numeric(10,2) not null check (amount > 0 and amount < 1000000),
+  note text check (char_length(note) <= 200),
+  created_at timestamptz not null default now(),
+  created_by uuid default auth.uid()
+);
+create index att_pay_items_day_idx on public.att_pay_items (day);
+alter table public.att_pay_items enable row level security;
+revoke all on public.att_pay_items from anon;
+create policy att_pay_items_read on public.att_pay_items for select to authenticated using ((select att_private.is_hr()));
+create policy att_pay_items_insert on public.att_pay_items for insert to authenticated with check ((select att_private.is_hr()));
+create policy att_pay_items_update on public.att_pay_items for update to authenticated using ((select att_private.is_hr())) with check ((select att_private.is_hr()));
+create policy att_pay_items_delete on public.att_pay_items for delete to authenticated using ((select att_private.is_hr()));
+alter publication supabase_realtime add table public.att_pay_items;
