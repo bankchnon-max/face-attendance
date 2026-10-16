@@ -166,8 +166,13 @@ function availableRolls(receipts: Any[], cuts: Any[], type: string, cutBatches: 
     if (!usedIds.has(r.id) && !usedNos.has(r.rollNo)) return true;
     if (!(r.widthIn && r.lengthIn)) return false;
     let used = 0;
-    cutBatches.filter((b) => b.rollId ? b.rollId === r.id : (b.fabricType === r.fabricType && b.rollNo === r.rollNo)).forEach((b) => {
-      const L = pieceLayout(r.widthIn, b.size); if (L) used += Math.ceil(b.qtyCut / L.across) * L.along; });
+    /* ถุงปกติทั้งถุง + ส่วนของถุงที่มีผ้าหลายม้วน (parts) */
+    cutBatches.forEach((b) => {
+      const qs = Array.isArray(b.parts) && b.parts.length ? b.parts.filter((p: Any) => p.rollId === r.id).map((p: Any) => +p.qty || 0)
+        : ((b.rollId ? b.rollId === r.id : (b.fabricType === r.fabricType && b.rollNo === r.rollNo)) ? [+b.qtyCut || 0] : []);
+      const L = qs.length ? pieceLayout(r.widthIn, b.size) : null;
+      if (L) qs.forEach((q: number) => { used += Math.ceil(q / L.across) * L.along; });
+    });
     return Math.max(0, r.lengthIn - used) >= 1;
   });
 }
