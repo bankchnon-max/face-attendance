@@ -282,9 +282,9 @@ async function costCtx() {
 }
 const COST_URL_APP = 'https://production.winpolydesign.com/cost-app';
 function yesterday(today: string) { const x = new Date(today + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() - 1); return x.toISOString().slice(0, 10); }
-async function costMessage(pre?: Any): Promise<string | null> {
+async function costMessage(pre?: Any, dayOverride?: string): Promise<string | null> {
   const { COST, ctx, today } = pre || await costCtx();
-  const day = yesterday(today), c = COST.dayCost(ctx, day);
+  const day = dayOverride || yesterday(today), c = COST.dayCost(ctx, day);
   if (!(c.total > 0) && !c.packs) return null;   /* เมื่อวานไม่มีผลิตและไม่มีค่าแรง: ไม่ส่ง */
   const kg = (ctx.PROD.line || []).filter((l: Any) => String(l.time).slice(0, 10) === day)
     .reduce((a: number, l: Any) => a + Math.max(0, ((l.actualWeight != null ? +l.actualWeight : +l.stdPerPack) || 0) - (+l.bagKgPerPack || 0)), 0);
@@ -331,7 +331,7 @@ async function handleWebhook(raw: string, signature: string) {
       } catch { /* the name is only for display */ }
       await admin.from('att_line_targets').upsert({ line_id: id, kind, name: label });
       await setConfig({ link_code: null, link_code_expires: null });
-      reply = `✅ เชื่อมต่อสำเร็จ ${kind === 'user' ? 'แชทนี้' : 'กลุ่มนี้'}จะได้รับแจ้งเตือนคำขอลา และสรุปการลงเวลาทุกวันเวลา 21:00`;
+      reply = `✅ เชื่อมต่อสำเร็จ ${kind === 'user' ? 'แชทนี้' : 'กลุ่มนี้'}จะได้รับแจ้งเตือน: คำขอลา · สรุปลงเวลา 21:00 · สต๊อกใกล้หมด 08:00 (เลือกเรื่องที่รับได้ในแอพ ตั้งค่า → แจ้งเตือน LINE)`;
     }
     if (ev.replyToken) await lineApi(cfg.channel_token!, 'message/reply', { replyToken: ev.replyToken, messages: [{ type: 'text', text: reply }] }).catch(console.error);
   }
@@ -346,7 +346,8 @@ async function handleInternal(secret: string, body: Record<string, unknown>) {
   /* ตรวจข้อความโดยไม่ส่ง (ใช้ทดสอบหลังแก้โค้ด) */
   if (body.type === 'dry') {
     const pre = await costCtx();
-    return json({ stock: await stockMessage(), cost: await costMessage(pre), alerts: await alertsMessage(pre) });
+    const d = /^\d{4}-\d\d-\d\d$/.test(String(body.day || '')) ? String(body.day) : undefined;
+    return json({ stock: await stockMessage(), cost: await costMessage(pre, d), alerts: await alertsMessage(pre) });
   }
   if (body.type === 'morning') {
     const out: Record<string, unknown> = {};
