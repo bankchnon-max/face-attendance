@@ -1,7 +1,8 @@
 // att-line: LINE notifications for HR.
 // Three kinds of callers, each authenticated differently (so the function is deployed without JWT checks):
 //   1. LINE webhook (x-line-signature)  -> link a chat with a one-time code, forget chats that remove the bot,
-//      link an HR person's LINE ("ผูก NNNNNN") and approve/reject leave from the buttons in the leave message
+//      link an HR person's LINE ("ผูก NNNNNN") and approve/reject leave from the buttons in the leave message,
+//      answer typed commands in linked chats (สต๊อก · ต้นทุน [วันที่] · ลงเวลา · ลา · เตือน · เมนู), only for topics that chat receives
 //   2. the database (x-internal-secret) -> new leave request, daily summary, morning (low stock + yesterday's cost + cost checks)
 // Each chat (att_line_targets.topics) picks which topics it receives: leave · daily · stock · cost · alerts
 //   3. HR in the app (user JWT, role hr) -> save bot keys, get a link code, list/remove chats, test
@@ -135,7 +136,7 @@ async function decideFromLine(cfg: Config, lineUserId: string | undefined, id: s
   return (status === 'approved' ? '✅ อนุมัติแล้ว' : '❌ ไม่อนุมัติ') + `\n${head}\nโดย ${ap.name || 'HR'}` + (status === 'rejected' ? '\n(ใส่เหตุผลเพิ่มได้ในแอพ)' : '');
 }
 
-async function dailyMessage() {
+async function dailyMessage(live = false) {
   const today = bkk(new Date()).key;
   const { data: evs } = await admin.from('att_events').select('emp_id, time, type, source')
     .gte('time', new Date(`${today}T00:00:00+07:00`).toISOString()).order('time');
@@ -161,7 +162,7 @@ async function dailyMessage() {
   const noOut = came.filter(([, p]) => !p.out).map(([id]) => name(id));
   const manual = [...people.entries()].filter(([, p]) => p.manual).map(([id, p]) => `${name(id)} (${p.manual})`);
   return [
-    `📊 สรุปการลงเวลา ${thDate(today)}`,
+    `📊 สรุปการลงเวลา ${thDate(today)}${live ? ` (ณ ${bkk(new Date()).hm} น.)` : ''}`,
     `มาทำงาน ${came.length} คน${late.length ? ` · มาสาย ${late.length} คน` : ''}`,
     noOut.length ? `⚠️ ยังไม่สแกนออก ${noOut.length} คน: ${noOut.join(', ')}` : '✅ ทุกคนสแกนออกครบ',
     manual.length ? `👆 ลงเวลาด้วยการเลือกชื่อ: ${manual.join(', ')}` : '',
@@ -335,7 +336,7 @@ async function costMessage(pre?: Any, dayOverride?: string): Promise<string | nu
   const rows: [string, number][] = [['🧶 ใย ' + fmtInt(c.fiberKg) + ' กก.', c.fiber], ['🧵 ผ้า+ค่าเย็บ', c.fabric], ['📦 ถุงแพ็ค', c.bagPack], ['🛍️ ถุงซิล', c.bagZip],
     ['👷 ค่าแรง (รวมเงินเดือน)', c.labor], ['🏦 ดอกเบี้ย', c.interest], ['🔥 แก๊ส', c.gas], ['⚡ ค่าไฟ', c.elec], ['🚚 ขนส่ง', c.ship]];
   return [
-    '💰 ต้นทุนผลิตเมื่อวาน · ' + thDate(day),
+    '💰 ต้นทุนผลิต' + (day === yesterday(today) ? 'เมื่อวาน' : '') + ' · ' + thDate(day),
     'ผลิต ' + fmtInt(c.packs) + ' แพ็ค · ' + fmtInt(c.pieces) + ' ชิ้น' + (kg > 0 ? ' · ' + fmtInt(kg) + ' กก.' : '') + ' · เดินเครื่อง ' + c.hours + ' ชม.',
     'รวม ' + fmtBaht(c.total) + ' บาท' + (c.pieces ? ' · ' + fmtBaht(c.perPiece) + ' บาท/ชิ้น' : '') + (kg > 0 ? ' · ' + fmtBaht(r2(c.total / kg)) + ' บาท/กก.' : ''),
     ...rows.filter(([, v]) => +v > 0).map(([k, v]) => '• ' + k + ' ' + fmtBaht(v)),
@@ -351,13 +352,87 @@ async function alertsMessage(pre?: Any): Promise<string | null> {
     A.length > 10 ? '…อีก ' + (A.length - 10) + ' เรื่อง' : '', '', 'ดูในแอพ: ' + COST_URL_APP].filter((x, i, a) => x !== '' || i === a.length - 2).join('\n');
 }
 
+/* ---------- พิมพ์ถามบอท ---------- */
+const TOPIC_LABEL: Record<string, string> = { leave: 'คำขอลา', daily: 'สรุปลงเวลา', stock: 'สต๊อกใกล้หมด', cost: 'ต้นทุน', alerts: 'จุดที่ควรดู' };
+const CMDS: [RegExp, string, string][] = [
+  [/^(?:สต[๊็]?อก|stock)$/i, 'stock', 'สต๊อก — ของที่ใกล้หมดตอนนี้'],
+  [/^(?:ต้นทุน|cost)(?:\s+(.+))?$/i, 'cost', 'ต้นทุน — ต้นทุนผลิตเมื่อวาน · ต้นทุน 15/10 — วันที่เลือก'],
+  [/^(?:ลงเวลา|สรุป|เข้างาน)$/, 'daily', 'ลงเวลา — สรุปการลงเวลาวันนี้ ณ ตอนนี้'],
+  [/^(?:ลา|การลา|คำขอลา)$/, 'leave', 'ลา — ใครลาวันนี้ + คำขอลาที่รออนุมัติ (กดอนุมัติได้)'],
+  [/^(?:เตือน|จุดที่ควรดู|alerts?)$/i, 'alerts', 'เตือน — จุดที่ควรดูจากแอพต้นทุน'],
+];
+/* "15/10" "15/10/69" "15/10/2569" "2026-10-15" "วันนี้" "เมื่อวาน" → YYYY-MM-DD (ไม่ใส่ปี = ปีนี้ ถ้ายังไม่ถึงใช้ปีก่อน) */
+function parseDay(arg: string, today: string): string | null {
+  const a = arg.trim();
+  if (!a || a === 'เมื่อวาน') return yesterday(today);
+  if (a === 'วันนี้') return today;
+  let key = '';
+  if (/^\d{4}-\d\d-\d\d$/.test(a)) key = a;
+  else {
+    const m = a.match(/^(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{2,4}))?$/);
+    if (!m) return null;
+    let y = m[3] ? +m[3] : +today.slice(0, 4);
+    if (m[3] && y < 100) y += 2500;
+    if (y > 2400) y -= 543;
+    key = `${y}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+    if (!m[3] && key > today) key = `${y - 1}${key.slice(4)}`;
+  }
+  const d = new Date(key + 'T00:00:00Z');
+  return !isNaN(+d) && d.toISOString().slice(0, 10) === key ? key : null;
+}
+/* ใครลาวันนี้ + คำขอที่รออนุมัติ (การ์ดมีปุ่ม สูงสุด 10 ใบ) */
+async function leaveNowMessages(): Promise<unknown[]> {
+  const today = bkk(new Date()).key;
+  const [{ data: on }, { data: pend }] = await Promise.all([
+    admin.from('att_leaves').select('emp_id, type, part').eq('status', 'approved').lte('start_date', today).gte('end_date', today),
+    admin.from('att_leaves').select('id').eq('status', 'pending').order('requested_at'),
+  ]);
+  const ids = [...new Set((on ?? []).map((x: Any) => x.emp_id))];
+  const { data: emps } = ids.length ? await admin.from('att_employees').select('id, name').in('id', ids) : { data: [] as Any[] };
+  const nm = (id: string) => (emps ?? []).find((e: Any) => e.id === id)?.name ?? '(ไม่พบชื่อ)';
+  const p = pend ?? [];
+  const lines = [
+    `🗓 ลาวันนี้ ${thDate(today)}: ${(on ?? []).length ? (on ?? []).map((x: Any) => `${nm(x.emp_id)} (${LEAVE[x.type] ?? x.type}${x.part !== 'full' ? ' ' + (PART[x.part] ?? '') : ''})`).join(', ') : 'ไม่มี'}`,
+    p.length ? `📝 รออนุมัติ ${p.length} รายการ${p.length > 10 ? ' (แสดง 10 รายการแรก)' : ''}` : '✅ ไม่มีคำขอลารออนุมัติ',
+  ];
+  const out: unknown[] = [{ type: 'text', text: lines.join('\n') }];
+  const bubbles: unknown[] = [];
+  for (const x of p.slice(0, 10)) { const m = await leaveMessage(x.id); if (m) bubbles.push((m.messages[0] as Any).contents); }
+  if (bubbles.length) out.push({ type: 'flex', altText: `คำขอลารออนุมัติ ${p.length} รายการ`, contents: { type: 'carousel', contents: bubbles } });
+  return out;
+}
+async function commandReply(chatId: string, text: string): Promise<unknown[] | null> {
+  const help = /^(?:เมนู|คำสั่ง|help|\?|？)$/i.test(text);
+  const hit = CMDS.map((c) => ({ c, m: text.match(c[0]) })).find((x) => x.m);
+  if (!help && !hit) return null;   /* คุยกันทั่วไปในกลุ่ม: ไม่ตอบ */
+  const { data: t } = await admin.from('att_line_targets').select('topics').eq('line_id', chatId).maybeSingle();
+  if (!t) return null;              /* แชทที่ไม่ได้เชื่อมกับระบบ: ไม่ตอบอะไรเลย */
+  const can = (k: string) => !Array.isArray(t.topics) || t.topics.includes(k);
+  const T = (x: string) => [{ type: 'text', text: x.slice(0, 4900) }];
+  if (help || !hit) {
+    const mine = CMDS.filter((c) => can(c[1]));
+    return T(mine.length ? '🤖 พิมพ์ถามได้\n' + mine.map((c) => '• ' + c[2]).join('\n') : 'ห้องนี้ยังไม่ได้รับเรื่องไหน — ตั้งได้ในแอพลงเวลา → ตั้งค่า → แจ้งเตือน LINE → รับเรื่อง');
+  }
+  const k = hit.c[1];
+  if (!can(k)) return T(`ห้องนี้ไม่ได้รับเรื่อง "${TOPIC_LABEL[k]}" — เปิดได้ในแอพลงเวลา → ตั้งค่า → แจ้งเตือน LINE → รับเรื่อง`);
+  if (k === 'stock') return T((await stockMessage()) ?? '✅ ตอนนี้ไม่มีของใกล้หมด');
+  if (k === 'daily') return T((await dailyMessage(true)) ?? 'วันนี้ยังไม่มีใครลงเวลา');
+  if (k === 'alerts') return T((await alertsMessage()) ?? '✅ ตอนนี้ไม่มีจุดที่ควรดู');
+  if (k === 'leave') return await leaveNowMessages();
+  /* cost */
+  const today = bkk(new Date()).key, day = parseDay(hit.m![1] ?? '', today);
+  if (!day) return T('ไม่เข้าใจวันที่ — พิมพ์เช่น "ต้นทุน" (เมื่อวาน) · "ต้นทุน วันนี้" · "ต้นทุน 15/10" · "ต้นทุน 15/10/69"');
+  if (day > today) return T('ยังไม่ถึงวันที่ ' + thDate(day));
+  return T((await costMessage(undefined, day)) ?? `วันที่ ${thDate(day)} ไม่มีการผลิต (หรือยังไม่ได้ลงข้อมูล)`);
+}
+
 /* ---------- 1. LINE webhook ---------- */
 async function handleWebhook(raw: string, signature: string) {
   const cfg = await getConfig();
   if (!cfg.channel_secret || !(await validSignature(cfg.channel_secret, raw, signature))) return fail('invalid signature', 401);
   const body = JSON.parse(raw);
-  const reply = (ev: Any, text: string) => ev.replyToken
-    ? lineApi(cfg.channel_token!, 'message/reply', { replyToken: ev.replyToken, messages: [{ type: 'text', text }] }).catch(console.error) : null;
+  const reply = (ev: Any, text: string | unknown[]) => ev.replyToken
+    ? lineApi(cfg.channel_token!, 'message/reply', { replyToken: ev.replyToken, messages: typeof text === 'string' ? [{ type: 'text', text }] : text.slice(0, 5) }).catch(console.error) : null;
   for (const ev of body.events ?? []) {
     const src = ev.source ?? {};
     const id: string | undefined = src.groupId ?? src.roomId ?? src.userId;
@@ -371,8 +446,13 @@ async function handleWebhook(raw: string, signature: string) {
       continue;
     }
     if (ev.type !== 'message' || ev.message?.type !== 'text') continue;
+    /* ตัด @ชื่อบอท ที่แท็กในกลุ่มออกก่อน */
+    let said = String(ev.message.text);
+    for (const x of (ev.message.mention?.mentionees ?? []).filter((x: Any) => x.isSelf).sort((a: Any, b: Any) => b.index - a.index))
+      said = said.slice(0, x.index) + said.slice(x.index + x.length);
+    said = said.trim().replace(/\s+/g, ' ');
     /* HR ผูก LINE ของตัวเองเพื่อกดอนุมัติลาในไลน์ได้ */
-    const pm = String(ev.message.text).trim().match(/^ผูก\s*(\d{6})$/);
+    const pm = said.match(/^ผูก\s*(\d{6})$/);
     if (pm) {
       const ok = !!src.userId && !!cfg.approver_code && pm[1] === cfg.approver_code && !!cfg.approver_code_user
         && !!cfg.approver_code_expires && new Date(cfg.approver_code_expires) > new Date();
@@ -385,8 +465,12 @@ async function handleWebhook(raw: string, signature: string) {
       await reply(ev, `✅ ผูกแล้ว${name ? ' (' + name + ')' : ''} — กดปุ่ม "อนุมัติ / ไม่อนุมัติ" ในข้อความคำขอลาได้เลย`);
       continue;
     }
-    const m = String(ev.message.text).trim().match(/^(?:เชื่อม(?:ต่อ)?|link)\s*(\d{6})$/i);
-    if (!m) continue;
+    const m = said.match(/^(?:เชื่อม(?:ต่อ)?|link)\s*(\d{6})$/i);
+    if (!m) {
+      const out = await commandReply(id, said).catch((e) => { console.error('command failed', e); return [{ type: 'text', text: '⚠️ ดึงข้อมูลไม่สำเร็จ ลองใหม่อีกครั้ง หรือดูในแอพ' }]; });
+      if (out) await reply(ev, out);
+      continue;
+    }
     const ok = !!cfg.link_code && m[1] === cfg.link_code && !!cfg.link_code_expires && new Date(cfg.link_code_expires) > new Date();
     let msg = '❌ รหัสไม่ถูกต้องหรือหมดอายุ กรุณาสร้างรหัสใหม่ในแอป (ตั้งค่า → แจ้งเตือน LINE)';
     if (ok) {
@@ -397,7 +481,7 @@ async function handleWebhook(raw: string, signature: string) {
       } catch { /* the name is only for display */ }
       await admin.from('att_line_targets').upsert({ line_id: id, kind, name: label });
       await setConfig({ link_code: null, link_code_expires: null });
-      msg = `✅ เชื่อมต่อสำเร็จ ${kind === 'user' ? 'แชทนี้' : 'กลุ่มนี้'}จะได้รับแจ้งเตือน: คำขอลา · สรุปลงเวลา 21:00 · สต๊อกใกล้หมด 08:00 (เลือกเรื่องที่รับได้ในแอพ ตั้งค่า → แจ้งเตือน LINE)`;
+      msg = `✅ เชื่อมต่อสำเร็จ ${kind === 'user' ? 'แชทนี้' : 'กลุ่มนี้'}จะได้รับแจ้งเตือน: คำขอลา · สรุปลงเวลา 21:00 · สต๊อกใกล้หมด 08:00 (เลือกเรื่องที่รับได้ในแอพ ตั้งค่า → แจ้งเตือน LINE) · พิมพ์ "เมนู" เพื่อดูว่าถามบอทอะไรได้บ้าง`;
     }
     await reply(ev, msg);
   }

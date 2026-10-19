@@ -2828,6 +2828,7 @@ async function renderLine(keepCode) {
     <label class="check"><input type="checkbox" id="lnCost" ${st.notifyCost !== false ? 'checked' : ''}><span>ต้นทุนผลิตเมื่อวาน ทุกวัน 08:00 (รวม + แยกหมวด · ไม่ส่งวันที่ไม่มีผลิต)</span></label>
     <label class="check"><input type="checkbox" id="lnAlerts" ${st.notifyAlerts !== false ? 'checked' : ''}><span>⚠ จุดที่ควรดู จากแอพต้นทุน ทุกวัน 08:00 (ส่งเฉพาะตอนรายการเปลี่ยน)</span></label>
     <p class="small muted" style="margin:4px 0 0">ห้องไหนรับเรื่องไหน ติ๊กที่ "รับเรื่อง" ใต้ชื่อห้องด้านบน · ห้องที่เชื่อมใหม่ได้ ลา / ลงเวลา / สต๊อก — ต้นทุนและจุดที่ควรดูเป็นข้อมูลลับ ต้องติ๊กเพิ่มเอง</p>
+    <p class="small muted" style="margin:4px 0 0">💬 พิมพ์ถามบอทในห้องได้ตลอด: <b>เมนู</b> · <b>สต๊อก</b> · <b>ต้นทุน</b> (หรือ ต้นทุน 15/10) · <b>ลงเวลา</b> · <b>ลา</b> · <b>เตือน</b> — บอทตอบเฉพาะเรื่องที่ห้องนั้นรับ</p>
     <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:12px">
       <select id="lnKind" style="width:auto;flex:0 0 auto">${LINE_TOPICS.filter(([k]) => k !== 'leave').map(([k, lb]) => `<option value="${k}">${lb}</option>`).join('')}</select>
       <button type="button" class="btn" id="lnPreview">ดูตัวอย่าง</button>
