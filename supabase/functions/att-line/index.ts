@@ -1,6 +1,7 @@
 // att-line: LINE notifications for HR.
 // Three kinds of callers, each authenticated differently (so the function is deployed without JWT checks):
-//   1. LINE webhook (x-line-signature)  -> link a chat with a one-time code, forget chats that remove the bot
+//   1. LINE webhook (x-line-signature)  -> link a chat with a one-time code, forget chats that remove the bot,
+//      link an HR person's LINE ("ผูก NNNNNN") and approve/reject leave from the buttons in the leave message
 //   2. the database (x-internal-secret) -> new leave request, daily summary, morning (low stock + yesterday's cost + cost checks)
 // Each chat (att_line_targets.topics) picks which topics it receives: leave · daily · stock · cost · alerts
 //   3. HR in the app (user JWT, role hr) -> save bot keys, get a link code, list/remove chats, test
@@ -25,6 +26,7 @@ type Config = {
   channel_secret: string | null; channel_token: string | null; bot_name: string | null; bot_basic_id: string | null;
   link_code: string | null; link_code_expires: string | null; notify_leave: boolean; notify_daily: boolean; notify_stock: boolean;
   notify_cost: boolean; notify_alerts: boolean; last_alerts: string | null; internal_secret: string;
+  approver_code: string | null; approver_code_expires: string | null; approver_code_user: string | null;
 };
 async function getConfig(): Promise<Config> {
   const { data, error } = await admin.from('att_line_config').select('*').eq('id', 1).single();
@@ -45,12 +47,17 @@ async function lineApi(token: string, path: string, body?: unknown) {
 }
 const TOPICS = ['leave', 'daily', 'stock', 'cost', 'alerts'];
 /* ส่งเฉพาะห้องที่เลือกเรื่องนี้ไว้ (topic ว่าง = ทุกห้อง เช่น ข้อความทดสอบ) */
-async function pushAll(cfg: Config, text: string, topic?: string) {
+/* messages: ใช้แทนข้อความธรรมดา (เช่น Flex ที่มีปุ่ม) */
+async function pushAll(cfg: Config, text: string, topic?: string, messages?: unknown[]) {
   const { data: targets } = await admin.from('att_line_targets').select('line_id, topics');
   let sent = 0;
   for (const t of (targets ?? []).filter((x) => !topic || !Array.isArray(x.topics) || x.topics.includes(topic))) {
-    try { await lineApi(cfg.channel_token!, 'message/push', { to: t.line_id, messages: [{ type: 'text', text: text.slice(0, 4900) }] }); sent++; }
-    catch (e) { console.error('push failed', t.line_id, e); }
+    try { await lineApi(cfg.channel_token!, 'message/push', { to: t.line_id, messages: messages ?? [{ type: 'text', text: text.slice(0, 4900) }] }); sent++; }
+    catch (e) {
+      console.error('push failed', t.line_id, e);
+      /* Flex ส่งไม่ผ่าน → ส่งข้อความธรรมดาแทน ห้องนั้นจะได้ไม่พลาดแจ้งเตือน */
+      if (messages) try { await lineApi(cfg.channel_token!, 'message/push', { to: t.line_id, messages: [{ type: 'text', text: text.slice(0, 4900) }] }); sent++; } catch { /* logged above */ }
+    }
   }
   return sent;
 }
@@ -75,20 +82,57 @@ const toMin = (t: string) => { const [h, m] = t.split(':').map(Number); return h
 const LEAVE = { sick: 'ลาป่วย', personal: 'ลากิจ', vacation: 'ลาพักร้อน', other: 'ลาอื่นๆ' } as Record<string, string>;
 const PART = { full: 'เต็มวัน', am: 'ครึ่งวันเช้า', pm: 'ครึ่งวันบ่าย' } as Record<string, string>;
 
-async function leaveMessage(id: string) {
+async function leaveInfo(id: string) {
   const { data: l } = await admin.from('att_leaves').select('*').eq('id', id).maybeSingle();
-  if (!l || l.status !== 'pending') return null;
+  if (!l) return null;
   const { data: e } = await admin.from('att_employees').select('name, dept').eq('id', l.emp_id).maybeSingle();
   const dates = l.start_date === l.end_date ? thDate(l.start_date) : `${thDate(l.start_date)} – ${thDate(l.end_date)}`;
-  return [
+  return { l, name: `${e?.name ?? '(ไม่พบชื่อ)'}${e?.dept ? ` (${e.dept})` : ''}`, what: `${LEAVE[l.type] ?? l.type} · ${PART[l.part] ?? ''}`, dates };
+}
+/* ข้อความคำขอลา: ข้อความธรรมดา (สำรอง/แจ้งเตือนบนมือถือ) + Flex ที่มีปุ่ม อนุมัติ / ไม่อนุมัติ */
+async function leaveMessage(id: string, anyStatus = false) {
+  const x = await leaveInfo(id);
+  if (!x || (x.l.status !== 'pending' && !anyStatus)) return null;
+  const text = [
     '📝 มีคำขอลาใหม่ รออนุมัติ',
-    `ชื่อ: ${e?.name ?? '(ไม่พบชื่อ)'}${e?.dept ? ` (${e.dept})` : ''}`,
-    `ประเภท: ${LEAVE[l.type] ?? l.type} · ${PART[l.part] ?? ''}`,
-    `วันที่: ${dates}`,
-    l.reason ? `เหตุผล: ${l.reason}` : '',
+    `ชื่อ: ${x.name}`,
+    `ประเภท: ${x.what}`,
+    `วันที่: ${x.dates}`,
+    x.l.reason ? `เหตุผล: ${x.l.reason}` : '',
     '',
     `อนุมัติได้ที่: ${APP_URL}#leaves`,
-  ].filter((x, i) => x !== '' || i === 5).join('\n');
+  ].filter((v, i) => v !== '' || i === 5).join('\n');
+  const row = (k: string, v: string) => ({ type: 'box', layout: 'baseline', spacing: 'sm', contents: [
+    { type: 'text', text: k, size: 'sm', color: '#888888', flex: 2 }, { type: 'text', text: v || '-', size: 'sm', wrap: true, flex: 6 }] });
+  const btn = (label: string, act: string, style: string, color?: string) => ({ type: 'button', style, height: 'sm', ...(color ? { color } : {}),
+    action: { type: 'postback', label, data: `leave=${act}&id=${encodeURIComponent(id)}` } });
+  const flex = { type: 'flex', altText: text.split('\n').slice(0, 4).join(' · ').slice(0, 390), contents: { type: 'bubble',
+    body: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [
+      { type: 'text', text: '📝 มีคำขอลาใหม่ รออนุมัติ', weight: 'bold', size: 'md', wrap: true },
+      row('ชื่อ', x.name), row('ประเภท', x.what), row('วันที่', x.dates), ...(x.l.reason ? [row('เหตุผล', String(x.l.reason))] : [])] },
+    footer: { type: 'box', layout: 'vertical', spacing: 'sm', contents: [
+      { type: 'box', layout: 'horizontal', spacing: 'sm', contents: [btn('✅ อนุมัติ', 'approve', 'primary', '#16a34a'), btn('❌ ไม่อนุมัติ', 'reject', 'secondary')] },
+      { type: 'button', style: 'link', height: 'sm', action: { type: 'uri', label: 'เปิดในแอพ (ใส่เหตุผลที่ไม่อนุมัติ)', uri: APP_URL + '#leaves' } }] } } };
+  return { text, messages: [flex] };
+}
+/* กดปุ่มในข้อความลา: เฉพาะ LINE ที่ HR ผูกไว้ และ HR คนนั้นยังเป็น HR อยู่ */
+async function decideFromLine(cfg: Config, lineUserId: string | undefined, id: string, act: string) {
+  if (!lineUserId) return '⚠️ LINE ไม่ส่งข้อมูลว่าใครกด กรุณาอนุมัติในแอพ: ' + APP_URL + '#leaves';
+  const { data: ap } = await admin.from('att_line_approvers').select('user_id, name').eq('line_user_id', lineUserId).maybeSingle();
+  const { data: me } = ap ? await admin.from('att_staff').select('role').eq('user_id', ap.user_id).maybeSingle() : { data: null };
+  if (!ap || me?.role !== 'hr') return '⛔ ไม่มีสิทธิ์อนุมัติ — ต้องเป็น HR ที่ผูก LINE ไว้แล้ว (แอพลงเวลา → ตั้งค่า → แจ้งเตือน LINE → ผู้อนุมัติลาทาง LINE)';
+  const x = await leaveInfo(id);
+  if (!x) return 'ไม่พบคำขอลานี้ (อาจถูกลบไปแล้ว)';
+  const head = `${x.name} · ${x.what} · ${x.dates}`;
+  const done = { approved: 'อนุมัติไปแล้ว', rejected: 'ไม่อนุมัติไปแล้ว', cancelled: 'ถูกยกเลิกไปแล้ว' } as Record<string, string>;
+  if (x.l.status !== 'pending') return `ℹ️ รายการนี้${done[x.l.status] ?? x.l.status}${x.l.decided_at ? ' (' + thDate(bkk(new Date(x.l.decided_at)).key) + ' ' + bkk(new Date(x.l.decided_at)).hm + ' น.)' : ''}\n${head}`;
+  const status = act === 'approve' ? 'approved' : 'rejected';
+  /* เปลี่ยนเฉพาะที่ยังรออยู่ — กดพร้อมกันสองคน คนที่สองจะได้ "อนุมัติไปแล้ว" */
+  const { data: upd, error } = await admin.from('att_leaves').update({ status, decided_by: ap.user_id, decided_at: new Date().toISOString(), decision_note: null })
+    .eq('id', id).eq('status', 'pending').select('id');
+  if (error) throw error;
+  if (!upd?.length) return 'ℹ️ รายการนี้มีคนตัดสินไปแล้ว\n' + head;
+  return (status === 'approved' ? '✅ อนุมัติแล้ว' : '❌ ไม่อนุมัติ') + `\n${head}\nโดย ${ap.name || 'HR'}` + (status === 'rejected' ? '\n(ใส่เหตุผลเพิ่มได้ในแอพ)' : '');
 }
 
 async function dailyMessage() {
@@ -312,17 +356,39 @@ async function handleWebhook(raw: string, signature: string) {
   const cfg = await getConfig();
   if (!cfg.channel_secret || !(await validSignature(cfg.channel_secret, raw, signature))) return fail('invalid signature', 401);
   const body = JSON.parse(raw);
+  const reply = (ev: Any, text: string) => ev.replyToken
+    ? lineApi(cfg.channel_token!, 'message/reply', { replyToken: ev.replyToken, messages: [{ type: 'text', text }] }).catch(console.error) : null;
   for (const ev of body.events ?? []) {
     const src = ev.source ?? {};
     const id: string | undefined = src.groupId ?? src.roomId ?? src.userId;
     const kind = src.groupId ? 'group' : src.roomId ? 'room' : 'user';
     if (!id) continue;
     if (ev.type === 'unfollow' || ev.type === 'leave') { await admin.from('att_line_targets').delete().eq('line_id', id); continue; }
+    if (ev.type === 'postback') {
+      const p = new URLSearchParams(String(ev.postback?.data ?? ''));
+      const act = p.get('leave'), lid = p.get('id');
+      if (lid && (act === 'approve' || act === 'reject')) await reply(ev, await decideFromLine(cfg, src.userId, lid, act));
+      continue;
+    }
     if (ev.type !== 'message' || ev.message?.type !== 'text') continue;
+    /* HR ผูก LINE ของตัวเองเพื่อกดอนุมัติลาในไลน์ได้ */
+    const pm = String(ev.message.text).trim().match(/^ผูก\s*(\d{6})$/);
+    if (pm) {
+      const ok = !!src.userId && !!cfg.approver_code && pm[1] === cfg.approver_code && !!cfg.approver_code_user
+        && !!cfg.approver_code_expires && new Date(cfg.approver_code_expires) > new Date();
+      if (!ok) { await reply(ev, '❌ รหัสผูกไม่ถูกต้องหรือหมดอายุ กรุณากด "ผูก LINE ของฉัน" ในแอพใหม่'); continue; }
+      let name = '';
+      try { name = (await lineApi(cfg.channel_token!, src.groupId ? `group/${src.groupId}/member/${src.userId}` : src.roomId ? `room/${src.roomId}/member/${src.userId}` : `profile/${src.userId}`)).displayName ?? ''; }
+      catch { /* the name is only for display */ }
+      await admin.from('att_line_approvers').upsert({ line_user_id: src.userId, user_id: cfg.approver_code_user, name: name || null });
+      await setConfig({ approver_code: null, approver_code_expires: null, approver_code_user: null });
+      await reply(ev, `✅ ผูกแล้ว${name ? ' (' + name + ')' : ''} — กดปุ่ม "อนุมัติ / ไม่อนุมัติ" ในข้อความคำขอลาได้เลย`);
+      continue;
+    }
     const m = String(ev.message.text).trim().match(/^(?:เชื่อม(?:ต่อ)?|link)\s*(\d{6})$/i);
     if (!m) continue;
     const ok = !!cfg.link_code && m[1] === cfg.link_code && !!cfg.link_code_expires && new Date(cfg.link_code_expires) > new Date();
-    let reply = '❌ รหัสไม่ถูกต้องหรือหมดอายุ กรุณาสร้างรหัสใหม่ในแอป (ตั้งค่า → แจ้งเตือน LINE)';
+    let msg = '❌ รหัสไม่ถูกต้องหรือหมดอายุ กรุณาสร้างรหัสใหม่ในแอป (ตั้งค่า → แจ้งเตือน LINE)';
     if (ok) {
       let label = kind === 'user' ? 'แชทส่วนตัว' : 'กลุ่ม';
       try {
@@ -331,9 +397,9 @@ async function handleWebhook(raw: string, signature: string) {
       } catch { /* the name is only for display */ }
       await admin.from('att_line_targets').upsert({ line_id: id, kind, name: label });
       await setConfig({ link_code: null, link_code_expires: null });
-      reply = `✅ เชื่อมต่อสำเร็จ ${kind === 'user' ? 'แชทนี้' : 'กลุ่มนี้'}จะได้รับแจ้งเตือน: คำขอลา · สรุปลงเวลา 21:00 · สต๊อกใกล้หมด 08:00 (เลือกเรื่องที่รับได้ในแอพ ตั้งค่า → แจ้งเตือน LINE)`;
+      msg = `✅ เชื่อมต่อสำเร็จ ${kind === 'user' ? 'แชทนี้' : 'กลุ่มนี้'}จะได้รับแจ้งเตือน: คำขอลา · สรุปลงเวลา 21:00 · สต๊อกใกล้หมด 08:00 (เลือกเรื่องที่รับได้ในแอพ ตั้งค่า → แจ้งเตือน LINE)`;
     }
-    if (ev.replyToken) await lineApi(cfg.channel_token!, 'message/reply', { replyToken: ev.replyToken, messages: [{ type: 'text', text: reply }] }).catch(console.error);
+    await reply(ev, msg);
   }
   return json({ ok: true });
 }
@@ -347,7 +413,13 @@ async function handleInternal(secret: string, body: Record<string, unknown>) {
   if (body.type === 'dry') {
     const pre = await costCtx();
     const d = /^\d{4}-\d\d-\d\d$/.test(String(body.day || '')) ? String(body.day) : undefined;
-    return json({ stock: await stockMessage(), cost: await costMessage(pre, d), alerts: await alertsMessage(pre) });
+    /* leave: ให้ LINE ตรวจรูปแบบปุ่มของคำขอลาจริง (ไม่ส่ง) */
+    let leave: unknown = undefined;
+    if (body.leave) {
+      const m = await leaveMessage(String(body.leave), true);
+      leave = !m ? 'not found' : await lineApi(cfg.channel_token!, 'message/validate/push', { messages: m.messages }).then(() => 'valid', (e) => String(e));
+    }
+    return json({ stock: await stockMessage(), cost: await costMessage(pre, d), alerts: await alertsMessage(pre), leave });
   }
   if (body.type === 'morning') {
     const out: Record<string, unknown> = {};
@@ -365,7 +437,10 @@ async function handleInternal(secret: string, body: Record<string, unknown>) {
     return json(out);
   }
   let text: string | null = null, topic = '';
-  if (body.type === 'leave' && cfg.notify_leave) { text = await leaveMessage(String(body.id)); topic = 'leave'; }
+  if (body.type === 'leave' && cfg.notify_leave) {
+    const m = await leaveMessage(String(body.id));
+    return json(m ? { sent: await pushAll(cfg, m.text, 'leave', m.messages) } : { skipped: true });
+  }
   if (body.type === 'daily' && cfg.notify_daily) { text = await dailyMessage(); topic = 'daily'; }
   if (body.type === 'stock' && cfg.notify_stock) { text = await stockMessage(); topic = 'stock'; }
   if (!text) return json({ skipped: true });
@@ -384,10 +459,14 @@ async function handleHr(token: string, body: Record<string, unknown>) {
     case 'status': {
       const { data: targets } = await admin.from('att_line_targets').select('line_id, kind, name, created_at, topics').order('created_at');
       const codeLive = cfg.link_code && cfg.link_code_expires && new Date(cfg.link_code_expires) > new Date();
+      const { data: approvers } = await admin.from('att_line_approvers').select('line_user_id, user_id, name, created_at').order('created_at');
+      const apLive = cfg.approver_code && cfg.approver_code_user === user.id && cfg.approver_code_expires && new Date(cfg.approver_code_expires) > new Date();
       return json({
         configured: !!cfg.channel_token, botName: cfg.bot_name, basicId: cfg.bot_basic_id, webhookUrl: WEBHOOK_URL,
         notifyLeave: cfg.notify_leave, notifyDaily: cfg.notify_daily, notifyStock: cfg.notify_stock, notifyCost: cfg.notify_cost, notifyAlerts: cfg.notify_alerts, targets: targets ?? [],
         code: codeLive ? cfg.link_code : null, codeExpires: codeLive ? cfg.link_code_expires : null,
+        approvers: (approvers ?? []).map((a) => ({ line_user_id: a.line_user_id, name: a.name, created_at: a.created_at, mine: a.user_id === user.id })),
+        approverCode: apLive ? cfg.approver_code : null, approverCodeExpires: apLive ? cfg.approver_code_expires : null,
       });
     }
     case 'save': {
@@ -405,6 +484,17 @@ async function handleHr(token: string, body: Record<string, unknown>) {
       const expires = new Date(Date.now() + 15 * 60000).toISOString();
       await setConfig({ link_code: code, link_code_expires: expires });
       return json({ code, expires });
+    }
+    case 'approver-code': {
+      if (!cfg.channel_token) return fail('ยังไม่ได้ตั้งค่าบอท LINE');
+      const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1000000).padStart(6, '0');
+      const expires = new Date(Date.now() + 15 * 60000).toISOString();
+      await setConfig({ approver_code: code, approver_code_expires: expires, approver_code_user: user.id });
+      return json({ code, expires });
+    }
+    case 'approver-remove': {
+      await admin.from('att_line_approvers').delete().eq('line_user_id', String(body.line_user_id ?? ''));
+      return json({ ok: true });
     }
     case 'options': {
       await setConfig({ notify_leave: !!body.notifyLeave, notify_daily: !!body.notifyDaily, ...(body.notifyStock === undefined ? {} : { notify_stock: !!body.notifyStock }),
@@ -451,7 +541,9 @@ async function handleHr(token: string, body: Record<string, unknown>) {
     }
     case 'disconnect': {
       await admin.from('att_line_targets').delete().neq('line_id', '');
-      await setConfig({ channel_secret: null, channel_token: null, bot_name: null, bot_basic_id: null, link_code: null, link_code_expires: null });
+      await admin.from('att_line_approvers').delete().neq('line_user_id', '');
+      await setConfig({ channel_secret: null, channel_token: null, bot_name: null, bot_basic_id: null, link_code: null, link_code_expires: null,
+        approver_code: null, approver_code_expires: null, approver_code_user: null });
       return json({ ok: true });
     }
     default:

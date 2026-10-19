@@ -2803,7 +2803,7 @@ async function renderLine(keepCode) {
     return;
   }
   const addUrl = st.basicId ? `https://line.me/R/ti/p/${encodeURIComponent(st.basicId)}` : null;
-  const targets = st.targets || [];
+  const targets = st.targets || [], approvers = st.approvers || [];
   box.innerHTML = `
     <div class="row" style="margin-bottom:12px"><div class="grow"><b>บอท: ${esc(st.botName || '-')}</b> <span class="muted small">${esc(st.basicId || '')}</span></div>
       <span class="badge b-ok">เชื่อมต่อแล้ว</span></div>
@@ -2814,6 +2814,13 @@ async function renderLine(keepCode) {
         <button type="button" class="btn sm danger" data-lnremove="${esc(t.line_id)}">เลิกส่ง</button></div>`).join('')
       : '<div class="empty small">ยังไม่มี — กด "เพิ่มห้องรับแจ้งเตือน" ด้านล่าง</div>'}</div>
     <div id="lnCodeBox" style="margin-top:12px">${st.code ? lineCodeHtml(st.code, st.codeExpires, addUrl) : `<button type="button" class="btn primary" id="lnNewCode">เพิ่มห้องรับแจ้งเตือน</button>`}</div>
+    <h3>ผู้อนุมัติลาทาง LINE (${approvers.length})</h3>
+    <p class="small muted" style="margin:0 0 8px">ข้อความคำขอลาในไลน์มีปุ่ม ✅ อนุมัติ / ❌ ไม่อนุมัติ — กดได้เฉพาะ HR ที่ผูก LINE ไว้ตรงนี้ คนอื่นในกลุ่มกดจะขึ้น "ไม่มีสิทธิ์" · ไม่อนุมัติแล้วอยากใส่เหตุผล ใส่ในแอพ</p>
+    <div class="list">${approvers.length ? approvers.map(a => `<div class="row"><div class="grow">👤 ${esc(a.name || 'LINE')}${a.mine ? ' <span class="badge b-ok">คุณ</span>' : ''}
+        <div class="small muted">ผูกเมื่อ ${new Date(a.created_at).toLocaleDateString('th-TH')}</div></div>
+        <button type="button" class="btn sm danger" data-lnapdel="${esc(a.line_user_id)}">ลบสิทธิ์</button></div>`).join('')
+      : '<div class="empty small">ยังไม่มี — ตอนนี้ปุ่มในไลน์ยังกดอนุมัติไม่ได้ กด "ผูก LINE ของฉัน" ด้านล่าง</div>'}</div>
+    <div id="lnApBox" style="margin-top:12px">${st.approverCode ? approverCodeHtml(st.approverCode, st.approverCodeExpires, addUrl) : `<button type="button" class="btn" id="lnApCode">ผูก LINE ของฉัน (ให้กดอนุมัติลาในไลน์ได้)</button>`}</div>
     <h3>แจ้งเตือนอะไรบ้าง</h3>
     <label class="check"><input type="checkbox" id="lnLeave" ${st.notifyLeave ? 'checked' : ''}><span>มีคำขอลาใหม่ (ทันที)</span></label>
     <label class="check"><input type="checkbox" id="lnDaily" ${st.notifyDaily ? 'checked' : ''}><span>สรุปการลงเวลาประจำวัน เวลา 21:00 (ไม่ส่งวันที่ไม่มีใครมา)</span></label>
@@ -2834,6 +2841,20 @@ async function renderLine(keepCode) {
     <details class="small muted" style="margin-top:10px"><summary>Webhook URL (สำหรับตั้งค่าใน LINE Developers)</summary>
       <div class="copy-row" style="margin-top:6px"><input type="text" readonly value="${esc(st.webhookUrl)}">${copyBtn(st.webhookUrl)}</div></details>`;
   if (st.code) watchForNewChat(targets.length);
+  else if (st.approverCode) watchForApprover(approvers.length);
+}
+function approverCodeHtml(code, expires, addUrl) {
+  return `<div class="note" style="margin:0">
+    <div>ใช้ LINE ของคุณเอง พิมพ์ส่งหาบอท${addUrl ? ` (<a href="${esc(addUrl)}" target="_blank" rel="noopener">แชทกับบอท</a>)` : ''} หรือพิมพ์ในกลุ่มที่มีบอท:</div>
+    <div class="line-code">ผูก ${esc(code)}</div>
+    <div>รหัสใช้ได้ถึง ${hm(Date.parse(expires))} น. · ใช้ได้ครั้งเดียว · บอทจะตอบว่า "ผูกแล้ว"</div></div>`;
+}
+function watchForApprover(count) {
+  clearInterval(lineWatch);
+  lineWatch = setInterval(async () => {
+    if (currentView !== 'settings') { clearInterval(lineWatch); return; }
+    try { const st = await lineCall({ action: 'status' }); if ((st.approvers || []).length !== count || !st.approverCode) { toast('ผูก LINE ผู้อนุมัติแล้ว', 'ok'); renderLine(); } } catch {}
+  }, 5000);
 }
 function lineCodeHtml(code, expires, addUrl) {
   return `<div class="note" style="margin:0">
@@ -2858,6 +2879,15 @@ $('#lineBody').addEventListener('click', async ev => {
       $('#lnCodeBox').innerHTML = lineCodeHtml(r.code, r.expires, st.basicId ? `https://line.me/R/ti/p/${encodeURIComponent(st.basicId)}` : null);
       watchForNewChat((st.targets || []).length);
     }
+    if (t.id === 'lnApCode') {
+      const st = await lineCall({ action: 'status' }), r = await lineCall({ action: 'approver-code' });
+      $('#lnApBox').innerHTML = approverCodeHtml(r.code, r.expires, st.basicId ? `https://line.me/R/ti/p/${encodeURIComponent(st.basicId)}` : null);
+      watchForApprover((st.approvers || []).length);
+    }
+    if (t.closest('[data-lnapdel]')) {
+      if (!confirm('ลบสิทธิ์อนุมัติลาทาง LINE ของคนนี้?')) return;
+      await lineCall({ action: 'approver-remove', line_user_id: t.closest('[data-lnapdel]').dataset.lnapdel }); renderLine();
+    }
     if (t.closest('[data-lnremove]')) {
       if (!confirm('เลิกส่งแจ้งเตือนไปที่ห้องนี้?')) return;
       await lineCall({ action: 'remove', line_id: t.closest('[data-lnremove]').dataset.lnremove }); renderLine();
@@ -2880,7 +2910,7 @@ $('#lineBody').addEventListener('click', async ev => {
     }
     if (t.id === 'lnStockNow') { const r = await lineCall({ action: 'stock-now' }); toast(r.empty ? 'ตอนนี้ไม่มีของใกล้หมด จึงไม่ได้ส่ง' : r.sent ? `ส่งเช็คสต๊อกแล้ว ${r.sent} ห้อง` : 'ยังไม่มีห้องรับแจ้งเตือน', r.sent ? 'ok' : 'warn'); }
     if (t.id === 'lnDisconnect') {
-      if (!confirm('ยกเลิกการเชื่อมต่อบอท LINE? จะลบคีย์และห้องรับแจ้งเตือนทั้งหมด')) return;
+      if (!confirm('ยกเลิกการเชื่อมต่อบอท LINE? จะลบคีย์ ห้องรับแจ้งเตือน และผู้อนุมัติทาง LINE ทั้งหมด')) return;
       await lineCall({ action: 'disconnect' }); toast('ยกเลิกการเชื่อมต่อแล้ว', 'ok'); renderLine();
     }
   } catch (e) { toast(e.message, 'err'); }
