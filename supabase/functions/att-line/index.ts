@@ -340,8 +340,30 @@ async function costMessage(pre?: Any, dayOverride?: string): Promise<string | nu
     'ผลิต ' + fmtInt(c.packs) + ' แพ็ค · ' + fmtInt(c.pieces) + ' ชิ้น' + (kg > 0 ? ' · ' + fmtInt(kg) + ' กก.' : '') + ' · เดินเครื่อง ' + c.hours + ' ชม.',
     'รวม ' + fmtBaht(c.total) + ' บาท' + (c.pieces ? ' · ' + fmtBaht(c.perPiece) + ' บาท/ชิ้น' : '') + (kg > 0 ? ' · ' + fmtBaht(r2(c.total / kg)) + ' บาท/กก.' : ''),
     ...rows.filter(([, v]) => +v > 0).map(([k, v]) => '• ' + k + ' ' + fmtBaht(v)),
+    ...plantLines(COST, ctx, day, c),
     '', 'ดูละเอียด: ' + COST_URL_APP,
   ].join('\n');
+}
+/* แยกโรง (โรง 1 ใยแผ่น · โรง 2 หมอน · ปิกนิก) — สูตรเดียวกับหน้าสรุปแอพต้นทุนที่เลือกโรง · แอพต้นทุนรุ่นเก่ายังไม่มีแยกโรง = ไม่แสดง */
+function plantLines(COST: Any, ctx: Any, day: string, c: Any): string[] {
+  if (!COST.plantOf || !COST.PLANT_TH) return [];
+  const ord: Record<string, Any> = {}; (ctx.PROD.orders || []).forEach((o: Any) => { ord[o.id] = o; });
+  const out: string[] = [];
+  for (const p of ['p1', 'p2', 'pic']) {
+    const x = COST.dayCost(ctx, day, p);
+    if (!(x.total > 0) && !x.packs) continue;
+    const kg = (ctx.PROD.line || []).filter((l: Any) => String(l.time).slice(0, 10) === day && COST.plantOf(ord[l.orderId]) === p)
+      .reduce((a: number, l: Any) => a + Math.max(0, ((l.actualWeight != null ? +l.actualWeight : +l.stdPerPack) || 0) - (+l.bagKgPerPack || 0)), 0);
+    const per = p === 'p1' ? (kg > 0 ? ' · ' + fmtInt(kg) + ' กก. · ' + fmtBaht(r2(x.total / kg)) + ' บาท/กก.' : '')
+      : (x.pieces ? ' · ' + fmtInt(x.pieces) + ' ชิ้น · ' + fmtBaht(x.perPiece) + ' บาท/ชิ้น' : '');
+    const parts: [string, number][] = [['ใย', x.fiber], ['ผ้า+เย็บ', x.fabric], ['ถุง', r2((+x.bagPack || 0) + (+x.bagZip || 0))], ['ค่าแรง', x.labor],
+      ['ดอกเบี้ย', x.interest], ['ไฟ', x.elec], ['ส่ง', x.ship], ['แก๊ส', x.gas]];
+    out.push('🏭 ' + COST.PLANT_TH[p] + ' ' + fmtBaht(x.total) + ' บาท · ' + fmtInt(x.packs) + ' แพ็ค' + per,
+      '   ' + parts.filter(([, v]) => +v > 0).map(([k, v]) => k + ' ' + fmtInt(v)).join(' · '));
+  }
+  if (+c.cutPieces > 0 || +c.cutLabor > 0)
+    out.push('✂️ ตัดผ้า ' + fmtInt(c.cutPieces) + ' ชิ้น' + (c.cutRolls ? ' (' + c.cutRolls + ' ม้วน)' : '') + (+c.cutLabor > 0 ? ' · ค่าแรงคนตัด ' + fmtBaht(c.cutLabor) + ' บาท (อยู่ในค่าแรงโรง 2)' : ''));
+  return out.length ? ['', 'แยกโรง', ...out] : [];
 }
 async function alertsMessage(pre?: Any): Promise<string | null> {
   const { COST, ctx, today } = pre || await costCtx();
