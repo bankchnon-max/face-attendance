@@ -1,7 +1,8 @@
 // att-line: LINE notifications for HR.
 // Three kinds of callers, each authenticated differently (so the function is deployed without JWT checks):
 //   1. LINE webhook (x-line-signature)  -> link a chat with a one-time code, forget chats that remove the bot
-//   2. the database (x-internal-secret) -> new leave request, daily summary, low stock (stock app data)
+//   2. the database (x-internal-secret) -> new leave request, daily summary, morning (low stock + yesterday's cost + cost checks)
+// Each chat (att_line_targets.topics) picks which topics it receives: leave · daily · stock · cost · alerts
 //   3. HR in the app (user JWT, role hr) -> save bot keys, get a link code, list/remove chats, test
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
@@ -22,7 +23,8 @@ const admin = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE
 
 type Config = {
   channel_secret: string | null; channel_token: string | null; bot_name: string | null; bot_basic_id: string | null;
-  link_code: string | null; link_code_expires: string | null; notify_leave: boolean; notify_daily: boolean; notify_stock: boolean; internal_secret: string;
+  link_code: string | null; link_code_expires: string | null; notify_leave: boolean; notify_daily: boolean; notify_stock: boolean;
+  notify_cost: boolean; notify_alerts: boolean; last_alerts: string | null; internal_secret: string;
 };
 async function getConfig(): Promise<Config> {
   const { data, error } = await admin.from('att_line_config').select('*').eq('id', 1).single();
@@ -41,10 +43,12 @@ async function lineApi(token: string, path: string, body?: unknown) {
   if (!r.ok) throw new Error(`LINE ${r.status}: ${text.slice(0, 200)}`);
   return text ? JSON.parse(text) : {};
 }
-async function pushAll(cfg: Config, text: string) {
-  const { data: targets } = await admin.from('att_line_targets').select('line_id');
+const TOPICS = ['leave', 'daily', 'stock', 'cost', 'alerts'];
+/* ส่งเฉพาะห้องที่เลือกเรื่องนี้ไว้ (topic ว่าง = ทุกห้อง เช่น ข้อความทดสอบ) */
+async function pushAll(cfg: Config, text: string, topic?: string) {
+  const { data: targets } = await admin.from('att_line_targets').select('line_id, topics');
   let sent = 0;
-  for (const t of targets ?? []) {
+  for (const t of (targets ?? []).filter((x) => !topic || !Array.isArray(x.topics) || x.topics.includes(topic))) {
     try { await lineApi(cfg.channel_token!, 'message/push', { to: t.line_id, messages: [{ type: 'text', text: text.slice(0, 4900) }] }); sent++; }
     catch (e) { console.error('push failed', t.line_id, e); }
   }
@@ -224,6 +228,85 @@ async function stockMessage(): Promise<string | null> {
   return [`⚠️ สต๊อกใกล้หมด · ${thDate(bkk(new Date()).key)}`, ...lines, '', `ดูในแอพสต๊อก: ${STOCK_URL}`].join('\n');
 }
 
+/* ---------- ต้นทุนเมื่อวาน + จุดที่ควรดู ----------
+   ใช้บล็อก COST (คิดเงินล้วนๆ ไม่แตะหน้าจอ) จากแอพต้นทุนบนเว็บจริง — ตัวเลขตรงกับแอพเสมอ ไม่ต้องดูแลสองที่ */
+const COST_APP_URL = 'https://production.winpolydesign.com/cost-app';
+const r3 = (n: number) => Math.round(n * 1000) / 1000, r4 = (n: number) => Math.round(n * 10000) / 10000;
+const fmtBaht = (n: number) => (Math.round((+n || 0) * 100) / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtInt = (n: number) => Math.round(+n || 0).toLocaleString('en-US');
+const thDateShort = (iso: string) => { const d = String(iso || '').slice(0, 10).split('-'); return d.length < 3 ? '' : (+d[2]) + '/' + (+d[1]) + '/' + (+d[0] + 543); };
+async function loadCostCore(S: Any) {
+  const html = await (await fetch(COST_APP_URL + '?nc=' + Date.now())).text();
+  const a = html.indexOf('/* <cost-core> */'), b = html.indexOf('/* </cost-core> */');
+  if (a < 0 || b < 0) throw new Error('cost-core not found in cost app');
+  const src = html.slice(a, b);
+  return new Function('r2', 'r3', 'r4', 'S', src + '\nreturn COST;')(r2, r3, r4, S);
+}
+/* ข้อมูลที่แบ่งเก็บรายวัน (v3_line / v3_feed) — ประกอบกลับทั้งก้อน */
+async function splitAll(key: string): Promise<Any> {
+  const idx = await kvJson(key + '~idx');
+  const days = Object.keys(idx.days || {});
+  if (!days.length) return kvJson(key);
+  const out: Any = Object.assign({}, idx.rest || {});
+  (idx.fields || []).forEach((k: string) => { out[k] = []; });
+  for (let i = 0; i < days.length; i += 60) {
+    const { data } = await admin.from('kv_store').select('value').in('id', days.slice(i, i + 60).map((d) => key + '~' + d));
+    (data ?? []).forEach((r) => { try { const p = JSON.parse(r.value); (idx.fields || []).forEach((k: string) => { if (p[k]) out[k].push(...p[k]); }); } catch { /* ข้ามก้อนเสีย */ } });
+  }
+  return out;
+}
+async function costCtx() {
+  const [fi, fa, bg, gs, ord, fd, ln, st, pr] = await Promise.all([kvJson('v3s_fiber'), kvJson('v3s_fabric'), kvJson('v3s_bag'), kvJson('v3s_gas'),
+    kvJson('v3_orders'), splitAll('v3_feed'), splitAll('v3_line'), kvJson('v3k_set'), kvJson('v3k_price')]);
+  const S = { fiberReceipts: fi.receipts || [], fabricReceipts: fa.receipts || [], cutBatches: fa.cutBatches || [], sewReturns: fa.sewReturns || [],
+    sackReceipts: bg.receipts || [], reuseItems: bg.reuseItems || [], gasReceipts: gs.receipts || [] };
+  const PROD = { orders: ord.orders || [], wd: fd.wd || [], use: fd.use || [], fabricWd: fd.fabricWd || [], caseUse: fd.caseUse || [], bagWd: fd.bagWd || [],
+    bagUse: fd.bagUse || [], gasSwaps: fd.gasSwaps || [], sheetWd: fd.sheetWd || [], sheetUse: fd.sheetUse || [], feed: fd.feed || [],
+    line: ln.line || [], carry: ln.carry || [], scrap: ln.scrap || [] };
+  const KSET: Any = Object.assign({ sewPerPiece: 0, sewBySize: {}, laborDaily: 0, laborHoursPerDay: 8, laborPerPiece: 0, elecPerHour: 0, shipPerPack: 0, fixed: [], hoursOverride: 0 }, st || {});
+  const PRICE = Object.assign({ fiber: {}, fabric: {}, zip: {}, pack: {}, gas: 0 }, pr || {});
+  const COST = await loadCostCore(S);
+  KSET._hoursPerMonth = +KSET.hoursOverride > 0 ? +KSET.hoursOverride : Math.max(COST.hoursPerMonth(PROD.line), r2((+KSET.laborHoursPerDay || 8) * 26));
+  /* ค่าแรงรวมต่อวัน (ต่อหน้างาน ไม่ใช่รายคน) จากแอพสแกนหน้า — 40 วันล่าสุด */
+  const today = bkk(new Date()).key, from = new Date(today + 'T00:00:00Z'); from.setUTCDate(from.getUTCDate() - 40);
+  let LABOR: Any = null;
+  const { data: lab, error: labErr } = await admin.rpc('att_labor_daily_svc', { p_from: from.toISOString().slice(0, 10), p_to: today });
+  if (!labErr) {
+    LABOR = {};
+    (lab ?? []).forEach((x: Any) => { const k = String(x.day).slice(0, 10), e = LABOR[k] || (LABOR[k] = { total: 0, wage: 0, ot: 0, people: 0, units: 0, noWage: 0, noOut: 0, st: {} });
+      const b = r2((+x.wage_baht || 0) + (+x.ot_baht || 0)); e.total = r2(e.total + b); e.wage = r2(e.wage + (+x.wage_baht || 0)); e.ot = r2(e.ot + (+x.ot_baht || 0));
+      e.people += +x.people || 0; e.units += +x.day_units || 0; e.noWage += +x.no_wage || 0; e.noOut += +x.no_out || 0; e.st[x.station] = r2((e.st[x.station] || 0) + b); });
+  }
+  const ctx = { S, PROD, PRICE, LABOR, KSET, GAS: COST.gasRateFrom(PROD, PRICE) };
+  return { COST, ctx, today };
+}
+const COST_URL_APP = 'https://production.winpolydesign.com/cost-app';
+function yesterday(today: string) { const x = new Date(today + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() - 1); return x.toISOString().slice(0, 10); }
+async function costMessage(pre?: Any): Promise<string | null> {
+  const { COST, ctx, today } = pre || await costCtx();
+  const day = yesterday(today), c = COST.dayCost(ctx, day);
+  if (!(c.total > 0) && !c.packs) return null;   /* เมื่อวานไม่มีผลิตและไม่มีค่าแรง: ไม่ส่ง */
+  const kg = (ctx.PROD.line || []).filter((l: Any) => String(l.time).slice(0, 10) === day)
+    .reduce((a: number, l: Any) => a + Math.max(0, ((l.actualWeight != null ? +l.actualWeight : +l.stdPerPack) || 0) - (+l.bagKgPerPack || 0)), 0);
+  const rows: [string, number][] = [['🧶 ใย ' + fmtInt(c.fiberKg) + ' กก.', c.fiber], ['🧵 ผ้า+ค่าเย็บ', c.fabric], ['📦 ถุงแพ็ค', c.bagPack], ['🛍️ ถุงซิล', c.bagZip],
+    ['👷 ค่าแรง (รวมเงินเดือน)', c.labor], ['🏦 ดอกเบี้ย', c.interest], ['🔥 แก๊ส', c.gas], ['⚡ ค่าไฟ', c.elec], ['🚚 ขนส่ง', c.ship]];
+  return [
+    '💰 ต้นทุนผลิตเมื่อวาน · ' + thDate(day),
+    'ผลิต ' + fmtInt(c.packs) + ' แพ็ค · ' + fmtInt(c.pieces) + ' ชิ้น' + (kg > 0 ? ' · ' + fmtInt(kg) + ' กก.' : '') + ' · เดินเครื่อง ' + c.hours + ' ชม.',
+    'รวม ' + fmtBaht(c.total) + ' บาท' + (c.pieces ? ' · ' + fmtBaht(c.perPiece) + ' บาท/ชิ้น' : '') + (kg > 0 ? ' · ' + fmtBaht(r2(c.total / kg)) + ' บาท/กก.' : ''),
+    ...rows.filter(([, v]) => +v > 0).map(([k, v]) => '• ' + k + ' ' + fmtBaht(v)),
+    '', 'ดูละเอียด: ' + COST_URL_APP,
+  ].join('\n');
+}
+async function alertsMessage(pre?: Any): Promise<string | null> {
+  const { COST, ctx, today } = pre || await costCtx();
+  const A = COST.alerts(ctx, today, { thDate: thDateShort, fmtInt, fmtBaht }).filter((x: Any) => x.lv >= 1);
+  if (!A.length) return null;
+  const ic = ['ℹ️', '🟡', '🔴'];
+  return ['⚠️ จุดที่ควรดู (แอพต้นทุน) · ' + thDate(today), ...A.slice(0, 10).map((x: Any) => ic[x.lv] + ' ' + x.t + '\n   ' + x.d),
+    A.length > 10 ? '…อีก ' + (A.length - 10) + ' เรื่อง' : '', '', 'ดูในแอพ: ' + COST_URL_APP].filter((x, i, a) => x !== '' || i === a.length - 2).join('\n');
+}
+
 /* ---------- 1. LINE webhook ---------- */
 async function handleWebhook(raw: string, signature: string) {
   const cfg = await getConfig();
@@ -260,12 +343,32 @@ async function handleInternal(secret: string, body: Record<string, unknown>) {
   const cfg = await getConfig();
   if (secret !== cfg.internal_secret) return fail('forbidden', 403);
   if (!cfg.channel_token) return json({ skipped: 'not configured' });
-  let text: string | null = null;
-  if (body.type === 'leave' && cfg.notify_leave) text = await leaveMessage(String(body.id));
-  if (body.type === 'daily' && cfg.notify_daily) text = await dailyMessage();
-  if (body.type === 'stock' && cfg.notify_stock) text = await stockMessage();
+  /* ตรวจข้อความโดยไม่ส่ง (ใช้ทดสอบหลังแก้โค้ด) */
+  if (body.type === 'dry') {
+    const pre = await costCtx();
+    return json({ stock: await stockMessage(), cost: await costMessage(pre), alerts: await alertsMessage(pre) });
+  }
+  if (body.type === 'morning') {
+    const out: Record<string, unknown> = {};
+    if (cfg.notify_stock) { const t = await stockMessage(); out.stock = t ? await pushAll(cfg, t, 'stock') : 'none'; }
+    if (cfg.notify_cost || cfg.notify_alerts) {
+      const pre = await costCtx();
+      if (cfg.notify_cost) { const t = await costMessage(pre); out.cost = t ? await pushAll(cfg, t, 'cost') : 'none'; }
+      if (cfg.notify_alerts) {
+        const t = await alertsMessage(pre), key = t ? t.split('\n').slice(1).join('\n') : '';
+        /* ส่งเฉพาะตอนรายการเปลี่ยน — เรื่องเดิมค้างไม่ต้องเตือนซ้ำทุกเช้า */
+        if (t && key !== (cfg.last_alerts || '')) { out.alerts = await pushAll(cfg, t, 'alerts'); await setConfig({ last_alerts: key }); }
+        else { out.alerts = t ? 'unchanged' : 'none'; if (!t && cfg.last_alerts) await setConfig({ last_alerts: null }); }
+      }
+    }
+    return json(out);
+  }
+  let text: string | null = null, topic = '';
+  if (body.type === 'leave' && cfg.notify_leave) { text = await leaveMessage(String(body.id)); topic = 'leave'; }
+  if (body.type === 'daily' && cfg.notify_daily) { text = await dailyMessage(); topic = 'daily'; }
+  if (body.type === 'stock' && cfg.notify_stock) { text = await stockMessage(); topic = 'stock'; }
   if (!text) return json({ skipped: true });
-  return json({ sent: await pushAll(cfg, text) });
+  return json({ sent: await pushAll(cfg, text, topic) });
 }
 
 /* ---------- 3. HR in the app ---------- */
@@ -278,11 +381,11 @@ async function handleHr(token: string, body: Record<string, unknown>) {
 
   switch (body.action) {
     case 'status': {
-      const { data: targets } = await admin.from('att_line_targets').select('line_id, kind, name, created_at').order('created_at');
+      const { data: targets } = await admin.from('att_line_targets').select('line_id, kind, name, created_at, topics').order('created_at');
       const codeLive = cfg.link_code && cfg.link_code_expires && new Date(cfg.link_code_expires) > new Date();
       return json({
         configured: !!cfg.channel_token, botName: cfg.bot_name, basicId: cfg.bot_basic_id, webhookUrl: WEBHOOK_URL,
-        notifyLeave: cfg.notify_leave, notifyDaily: cfg.notify_daily, notifyStock: cfg.notify_stock, targets: targets ?? [],
+        notifyLeave: cfg.notify_leave, notifyDaily: cfg.notify_daily, notifyStock: cfg.notify_stock, notifyCost: cfg.notify_cost, notifyAlerts: cfg.notify_alerts, targets: targets ?? [],
         code: codeLive ? cfg.link_code : null, codeExpires: codeLive ? cfg.link_code_expires : null,
       });
     }
@@ -303,7 +406,8 @@ async function handleHr(token: string, body: Record<string, unknown>) {
       return json({ code, expires });
     }
     case 'options': {
-      await setConfig({ notify_leave: !!body.notifyLeave, notify_daily: !!body.notifyDaily, ...(body.notifyStock === undefined ? {} : { notify_stock: !!body.notifyStock }) });
+      await setConfig({ notify_leave: !!body.notifyLeave, notify_daily: !!body.notifyDaily, ...(body.notifyStock === undefined ? {} : { notify_stock: !!body.notifyStock }),
+        ...(body.notifyCost === undefined ? {} : { notify_cost: !!body.notifyCost }), ...(body.notifyAlerts === undefined ? {} : { notify_alerts: !!body.notifyAlerts }) });
       return json({ ok: true });
     }
     case 'remove': {
@@ -318,7 +422,23 @@ async function handleHr(token: string, body: Record<string, unknown>) {
     case 'summary-now': {
       if (!cfg.channel_token) return fail('ยังไม่ได้ตั้งค่าบอท LINE');
       const text = await dailyMessage();
-      return json({ sent: text ? await pushAll(cfg, text) : 0, empty: !text });
+      return json({ sent: text ? await pushAll(cfg, text, 'daily') : 0, empty: !text });
+    }
+    case 'topics': {
+      const topics = (Array.isArray(body.topics) ? body.topics : []).map(String).filter((x) => TOPICS.includes(x));
+      await admin.from('att_line_targets').update({ topics }).eq('line_id', String(body.line_id ?? ''));
+      return json({ ok: true, topics });
+    }
+    case 'preview': {
+      const k = String(body.kind || '');
+      const text = k === 'stock' ? await stockMessage() : k === 'cost' ? await costMessage() : k === 'alerts' ? await alertsMessage() : k === 'daily' ? await dailyMessage() : null;
+      return json({ text });
+    }
+    case 'send-now': {
+      if (!cfg.channel_token) return fail('ยังไม่ได้ตั้งค่าบอท LINE');
+      const k = String(body.kind || '');
+      const text = k === 'stock' ? await stockMessage() : k === 'cost' ? await costMessage() : k === 'alerts' ? await alertsMessage() : k === 'daily' ? await dailyMessage() : null;
+      return json({ sent: text ? await pushAll(cfg, text, k) : 0, empty: !text });
     }
     case 'stock-preview': {
       return json({ text: await stockMessage() });
@@ -326,7 +446,7 @@ async function handleHr(token: string, body: Record<string, unknown>) {
     case 'stock-now': {
       if (!cfg.channel_token) return fail('ยังไม่ได้ตั้งค่าบอท LINE');
       const text = await stockMessage();
-      return json({ sent: text ? await pushAll(cfg, text) : 0, empty: !text });
+      return json({ sent: text ? await pushAll(cfg, text, 'stock') : 0, empty: !text });
     }
     case 'disconnect': {
       await admin.from('att_line_targets').delete().neq('line_id', '');

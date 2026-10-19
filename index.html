@@ -2775,6 +2775,8 @@ async function lineCall(body) {
 }
 let lineWatch = null;
 const copyBtn = (text, label = 'คัดลอก') => `<button type="button" class="btn sm" data-copy="${esc(text)}">${label}</button>`;
+/* เรื่องที่แต่ละห้องเลือกรับได้ */
+const LINE_TOPICS = [['leave', 'คำขอลา'], ['daily', 'สรุปลงเวลา'], ['stock', 'สต๊อกใกล้หมด'], ['cost', 'ต้นทุนเมื่อวาน'], ['alerts', 'จุดที่ควรดู']];
 async function renderLine(keepCode) {
   const box = $('#lineBody');
   let st;
@@ -2807,7 +2809,8 @@ async function renderLine(keepCode) {
       <span class="badge b-ok">เชื่อมต่อแล้ว</span></div>
     <h3>ห้องที่รับแจ้งเตือน (${targets.length})</h3>
     <div class="list">${targets.length ? targets.map(t => `<div class="row"><div class="grow">${t.kind === 'user' ? '👤' : '👥'} ${esc(t.name || (t.kind === 'user' ? 'แชทส่วนตัว' : 'กลุ่ม'))}
-        <div class="small muted">${t.kind === 'user' ? 'แชทส่วนตัว' : 'กลุ่ม'} · เชื่อมเมื่อ ${new Date(t.created_at).toLocaleDateString('th-TH')}</div></div>
+        <div class="small muted">${t.kind === 'user' ? 'แชทส่วนตัว' : 'กลุ่ม'} · เชื่อมเมื่อ ${new Date(t.created_at).toLocaleDateString('th-TH')}</div>
+        <div class="small" style="display:flex;flex-wrap:wrap;gap:4px 12px;margin-top:6px">รับเรื่อง: ${LINE_TOPICS.map(([k, lb]) => `<label style="display:inline-flex;align-items:center;gap:4px;white-space:nowrap"><input type="checkbox" data-lntopic="${esc(t.line_id)}" value="${k}" ${!Array.isArray(t.topics) || t.topics.includes(k) ? 'checked' : ''}>${lb}</label>`).join('')}</div></div>
         <button type="button" class="btn sm danger" data-lnremove="${esc(t.line_id)}">เลิกส่ง</button></div>`).join('')
       : '<div class="empty small">ยังไม่มี — กด "เพิ่มห้องรับแจ้งเตือน" ด้านล่าง</div>'}</div>
     <div id="lnCodeBox" style="margin-top:12px">${st.code ? lineCodeHtml(st.code, st.codeExpires, addUrl) : `<button type="button" class="btn primary" id="lnNewCode">เพิ่มห้องรับแจ้งเตือน</button>`}</div>
@@ -2815,11 +2818,16 @@ async function renderLine(keepCode) {
     <label class="check"><input type="checkbox" id="lnLeave" ${st.notifyLeave ? 'checked' : ''}><span>มีคำขอลาใหม่ (ทันที)</span></label>
     <label class="check"><input type="checkbox" id="lnDaily" ${st.notifyDaily ? 'checked' : ''}><span>สรุปการลงเวลาประจำวัน เวลา 21:00 (ไม่ส่งวันที่ไม่มีใครมา)</span></label>
     <label class="check"><input type="checkbox" id="lnStock" ${st.notifyStock !== false ? 'checked' : ''}><span>สต๊อกใย ผ้า ถุง ปลอก ใกล้หมด ทุกวัน 08:00 (ไม่ส่งวันที่ไม่มีอะไรใกล้หมด)</span></label>
+    <label class="check"><input type="checkbox" id="lnCost" ${st.notifyCost !== false ? 'checked' : ''}><span>ต้นทุนผลิตเมื่อวาน ทุกวัน 08:00 (รวม + แยกหมวด · ไม่ส่งวันที่ไม่มีผลิต)</span></label>
+    <label class="check"><input type="checkbox" id="lnAlerts" ${st.notifyAlerts !== false ? 'checked' : ''}><span>⚠ จุดที่ควรดู จากแอพต้นทุน ทุกวัน 08:00 (ส่งเฉพาะตอนรายการเปลี่ยน)</span></label>
+    <p class="small muted" style="margin:4px 0 0">ห้องไหนรับเรื่องไหน ติ๊กที่ "รับเรื่อง" ใต้ชื่อห้องด้านบน · ห้องที่เชื่อมใหม่ได้ ลา / ลงเวลา / สต๊อก — ต้นทุนและจุดที่ควรดูเป็นข้อมูลลับ ต้องติ๊กเพิ่มเอง</p>
+    <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:12px">
+      <select id="lnKind" style="width:auto;flex:0 0 auto">${LINE_TOPICS.filter(([k]) => k !== 'leave').map(([k, lb]) => `<option value="${k}">${lb}</option>`).join('')}</select>
+      <button type="button" class="btn" id="lnPreview">ดูตัวอย่าง</button>
+      <button type="button" class="btn" id="lnSendNow">ส่งตอนนี้</button>
+    </div>
     <div class="actions">
       <button type="button" class="btn" id="lnTest">ส่งข้อความทดสอบ</button>
-      <button type="button" class="btn" id="lnSummary">ส่งสรุปวันนี้ตอนนี้</button>
-      <button type="button" class="btn" id="lnStockPreview">ดูตัวอย่างสต๊อกใกล้หมด</button>
-      <button type="button" class="btn" id="lnStockNow">ส่งเช็คสต๊อกตอนนี้</button>
       <button type="button" class="btn danger" id="lnDisconnect">ยกเลิกการเชื่อมต่อบอท</button>
     </div>
     <pre id="lnStockOut" class="note small" style="display:none;white-space:pre-wrap;margin:10px 0 0;font:inherit"></pre>
@@ -2855,6 +2863,16 @@ $('#lineBody').addEventListener('click', async ev => {
       await lineCall({ action: 'remove', line_id: t.closest('[data-lnremove]').dataset.lnremove }); renderLine();
     }
     if (t.id === 'lnTest') { const r = await lineCall({ action: 'test' }); toast(r.sent ? `ส่งแล้ว ${r.sent} ห้อง` : 'ยังไม่มีห้องรับแจ้งเตือน', r.sent ? 'ok' : 'warn'); }
+    if (t.id === 'lnPreview' || t.id === 'lnSendNow') {
+      const kind = $('#lnKind').value, lb = (LINE_TOPICS.find(x => x[0] === kind) || [])[1] || kind;
+      if (t.id === 'lnPreview') {
+        const out = $('#lnStockOut'); out.textContent = 'กำลังสร้างข้อความ…'; out.style.display = '';
+        const r = await lineCall({ action: 'preview', kind }); out.textContent = r.text || ('ตอนนี้ไม่มีข้อความ "' + lb + '" ที่ต้องส่ง');
+      } else {
+        const r = await lineCall({ action: 'send-now', kind });
+        toast(r.empty ? 'ตอนนี้ไม่มีข้อความ "' + lb + '" ที่ต้องส่ง' : r.sent ? `ส่ง "${lb}" แล้ว ${r.sent} ห้อง` : 'ยังไม่มีห้องที่เลือกรับเรื่องนี้', r.sent ? 'ok' : 'warn');
+      }
+    }
     if (t.id === 'lnSummary') { const r = await lineCall({ action: 'summary-now' }); toast(r.empty ? 'วันนี้ยังไม่มีใครลงเวลา จึงไม่มีสรุป' : r.sent ? `ส่งสรุปแล้ว ${r.sent} ห้อง` : 'ยังไม่มีห้องรับแจ้งเตือน', r.sent ? 'ok' : 'warn'); }
     if (t.id === 'lnStockPreview') {
       const r = await lineCall({ action: 'stock-preview' }), out = $('#lnStockOut');
@@ -2868,8 +2886,14 @@ $('#lineBody').addEventListener('click', async ev => {
   } catch (e) { toast(e.message, 'err'); }
 });
 $('#lineBody').addEventListener('change', async ev => {
-  if (!['lnLeave', 'lnDaily', 'lnStock'].includes(ev.target.id)) return;
-  try { await lineCall({ action: 'options', notifyLeave: $('#lnLeave').checked, notifyDaily: $('#lnDaily').checked, notifyStock: $('#lnStock').checked }); toast('บันทึกแล้ว', 'ok'); }
+  if (ev.target.dataset && ev.target.dataset.lntopic) {
+    const id = ev.target.dataset.lntopic;
+    const topics = [...$('#lineBody').querySelectorAll('[data-lntopic]')].filter(x => x.dataset.lntopic === id && x.checked).map(x => x.value);
+    try { await lineCall({ action: 'topics', line_id: id, topics }); toast('บันทึกเรื่องที่ห้องนี้รับแล้ว', 'ok'); } catch (e) { toast(e.message, 'err'); }
+    return;
+  }
+  if (!['lnLeave', 'lnDaily', 'lnStock', 'lnCost', 'lnAlerts'].includes(ev.target.id)) return;
+  try { await lineCall({ action: 'options', notifyLeave: $('#lnLeave').checked, notifyDaily: $('#lnDaily').checked, notifyStock: $('#lnStock').checked, notifyCost: $('#lnCost').checked, notifyAlerts: $('#lnAlerts').checked }); toast('บันทึกแล้ว', 'ok'); }
   catch (e) { toast(e.message, 'err'); }
 });
 $('#lineBody').addEventListener('submit', async ev => {
