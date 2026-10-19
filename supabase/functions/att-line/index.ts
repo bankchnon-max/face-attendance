@@ -318,9 +318,9 @@ async function costCtx() {
   const { data: lab, error: labErr } = await admin.rpc('att_labor_daily_svc', { p_from: from.toISOString().slice(0, 10), p_to: today });
   if (!labErr) {
     LABOR = {};
-    (lab ?? []).forEach((x: Any) => { const k = String(x.day).slice(0, 10), e = LABOR[k] || (LABOR[k] = { total: 0, wage: 0, ot: 0, people: 0, units: 0, noWage: 0, noOut: 0, st: {} });
+    (lab ?? []).forEach((x: Any) => { const k = String(x.day).slice(0, 10), e = LABOR[k] || (LABOR[k] = { total: 0, wage: 0, ot: 0, people: 0, units: 0, noWage: 0, noOut: 0, st: {}, stp: {} });
       const b = r2((+x.wage_baht || 0) + (+x.ot_baht || 0)); e.total = r2(e.total + b); e.wage = r2(e.wage + (+x.wage_baht || 0)); e.ot = r2(e.ot + (+x.ot_baht || 0));
-      e.people += +x.people || 0; e.units += +x.day_units || 0; e.noWage += +x.no_wage || 0; e.noOut += +x.no_out || 0; e.st[x.station] = r2((e.st[x.station] || 0) + b); });
+      e.people += +x.people || 0; e.units += +x.day_units || 0; e.noWage += +x.no_wage || 0; e.noOut += +x.no_out || 0; e.st[x.station] = r2((e.st[x.station] || 0) + b); e.stp[x.station] = (e.stp[x.station] || 0) + (+x.people || 0); });
   }
   const ctx = { S, PROD, PRICE, LABOR, KSET, GAS: COST.gasRateFrom(PROD, PRICE) };
   return { COST, ctx, today };
@@ -334,7 +334,7 @@ async function costMessage(pre?: Any, dayOverride?: string): Promise<string | nu
   const kg = (ctx.PROD.line || []).filter((l: Any) => String(l.time).slice(0, 10) === day)
     .reduce((a: number, l: Any) => a + Math.max(0, ((l.actualWeight != null ? +l.actualWeight : +l.stdPerPack) || 0) - (+l.bagKgPerPack || 0)), 0);
   const rows: [string, number][] = [['🧶 ใย ' + fmtInt(c.fiberKg) + ' กก.', c.fiber], ['🧵 ผ้า+ค่าเย็บ', c.fabric], ['📦 ถุงแพ็ค', c.bagPack], ['🛍️ ถุงซิล', c.bagZip],
-    ['👷 ค่าแรง (รวมเงินเดือน)', c.labor], ['🏦 ดอกเบี้ย', c.interest], ['🔥 แก๊ส', c.gas], ['⚡ ค่าไฟ', c.elec], ['🚚 ขนส่ง', c.ship]];
+    ['👷 ค่าแรง (รวมเงินเดือน)' + (+c.people > 0 ? ' · ' + fmtInt(c.people) + ' คน' : ''), c.labor], ['🏦 ดอกเบี้ย', c.interest], ['🔥 แก๊ส', c.gas], ['⚡ ค่าไฟ', c.elec], ['🚚 ขนส่ง', c.ship]];
   return [
     '💰 ต้นทุนผลิต' + (day === yesterday(today) ? 'เมื่อวาน' : '') + ' · ' + thDate(day),
     'ผลิต ' + fmtInt(c.packs) + ' แพ็ค · ' + fmtInt(c.pieces) + ' ชิ้น' + (kg > 0 ? ' · ' + fmtInt(kg) + ' กก.' : '') + ' · เดินเครื่อง ' + c.hours + ' ชม.',
@@ -364,7 +364,7 @@ function plantLines(COST: Any, ctx: Any, day: string, c: Any): string[] {
   /* ตัดผ้า: กลุ่มแยก (ค่าแรงคนหน้างานตัดผ้า) · มูลค่าผ้าที่ตัดแสดงเฉยๆ ค่าผ้าคิดตอนเบิกปลอกไปผลิต */
   if (+c.cutPieces > 0 || +c.cutLabor > 0)
     out.push('✂️ ตัดผ้า ' + (+c.cutLabor > 0 ? fmtBaht(c.cutLabor) + ' บาท (ค่าแรงคนตัด) · ' : '') + fmtInt(c.cutPieces) + ' ชิ้น' + (c.cutRolls ? ' (' + c.cutRolls + ' ม้วน)' : '') +
-      (+c.cutPieces > 0 && +c.cutLabor > 0 ? ' · ' + fmtBaht(r2(c.cutLabor / c.cutPieces)) + ' บาท/ชิ้น' : ''));
+      (+c.cutPieces > 0 && +c.cutLabor > 0 ? ' · ' + fmtBaht(r2(c.cutLabor / c.cutPieces)) + ' บาท/ชิ้น' : '') + (+c.cutPeople > 0 ? ' · ' + fmtInt(c.cutPeople) + ' คน' : ''));
   return out.length ? ['', 'แยกโรง', ...out] : [];
 }
 async function alertsMessage(pre?: Any): Promise<string | null> {
