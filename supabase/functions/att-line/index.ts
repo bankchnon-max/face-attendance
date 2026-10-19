@@ -361,8 +361,10 @@ function plantLines(COST: Any, ctx: Any, day: string, c: Any): string[] {
     out.push('🏭 ' + COST.PLANT_TH[p] + ' ' + fmtBaht(x.total) + ' บาท · ' + fmtInt(x.packs) + ' แพ็ค' + per,
       '   ' + parts.filter(([, v]) => +v > 0).map(([k, v]) => k + ' ' + fmtInt(v)).join(' · '));
   }
+  /* ตัดผ้า: กลุ่มแยก (ค่าแรงคนหน้างานตัดผ้า) · มูลค่าผ้าที่ตัดแสดงเฉยๆ ค่าผ้าคิดตอนเบิกปลอกไปผลิต */
   if (+c.cutPieces > 0 || +c.cutLabor > 0)
-    out.push('✂️ ตัดผ้า ' + fmtInt(c.cutPieces) + ' ชิ้น' + (c.cutRolls ? ' (' + c.cutRolls + ' ม้วน)' : '') + (+c.cutLabor > 0 ? ' · ค่าแรงคนตัด ' + fmtBaht(c.cutLabor) + ' บาท (อยู่ในค่าแรงโรง 2)' : ''));
+    out.push('✂️ ตัดผ้า ' + (+c.cutLabor > 0 ? fmtBaht(c.cutLabor) + ' บาท (ค่าแรงคนตัด) · ' : '') + fmtInt(c.cutPieces) + ' ชิ้น' + (c.cutRolls ? ' (' + c.cutRolls + ' ม้วน)' : '') +
+      (+c.cutPieces > 0 && +c.cutLabor > 0 ? ' · ' + fmtBaht(r2(c.cutLabor / c.cutPieces)) + ' บาท/ชิ้น' : ''));
   return out.length ? ['', 'แยกโรง', ...out] : [];
 }
 async function alertsMessage(pre?: Any): Promise<string | null> {
