@@ -358,7 +358,7 @@ function plantLines(COST: Any, ctx: Any, day: string, c: Any): string[] {
       : (x.pieces ? ' · ' + fmtInt(x.pieces) + ' ชิ้น · ' + fmtBaht(x.perPiece) + ' บาท/ชิ้น' : '');
     const parts: [string, number][] = [['ใย', x.fiber], ['ผ้า+เย็บ', x.fabric], ['ถุง', r2((+x.bagPack || 0) + (+x.bagZip || 0))], ['ค่าแรง', x.labor],
       ['ดอกเบี้ย', x.interest], ['ไฟ', x.elec], ['ส่ง', x.ship], ['แก๊ส', x.gas]];
-    out.push('🏭 ' + COST.PLANT_TH[p] + ' ' + fmtBaht(x.total) + ' บาท · ' + fmtInt(x.packs) + ' แพ็ค' + per,
+    out.push('🏭 ' + COST.PLANT_TH[p] + ' ' + fmtBaht(x.total) + ' บาท · ' + fmtInt(x.packs) + ' แพ็ค' + per + (+x.plantPeople > 0 ? ' · ' + (p === 'pic' ? 'แพ็ค ' : 'ไลน์ ') + (x.plantSplit ? '≈' : '') + Math.round(x.plantPeople * 10) / 10 + ' คน' : ''),
       '   ' + parts.filter(([, v]) => +v > 0).map(([k, v]) => k + ' ' + fmtInt(v)).join(' · '));
   }
   /* ตัดผ้า: กลุ่มแยก (ค่าแรงคนหน้างานตัดผ้า) · มูลค่าผ้าที่ตัดแสดงเฉยๆ ค่าผ้าคิดตอนเบิกปลอกไปผลิต */
