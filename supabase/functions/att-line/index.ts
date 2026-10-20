@@ -334,7 +334,7 @@ async function costMessage(pre?: Any, dayOverride?: string): Promise<string | nu
   const kg = (ctx.PROD.line || []).filter((l: Any) => String(l.time).slice(0, 10) === day)
     .reduce((a: number, l: Any) => a + Math.max(0, ((l.actualWeight != null ? +l.actualWeight : +l.stdPerPack) || 0) - (+l.bagKgPerPack || 0)), 0);
   const rows: [string, number][] = [['🧶 ใย ' + fmtInt(c.fiberKg) + ' กก.', c.fiber], ['🧵 ผ้า+ค่าเย็บ', c.fabric], ['📦 ถุงแพ็ค', c.bagPack], ['🛍️ ถุงซิล', c.bagZip],
-    ['👷 ค่าแรง (รวมเงินเดือน)' + (+c.linePeople > 0 ? ' · ไลน์ ' + fmtInt(c.linePeople) + ' คน' + (+c.picPeople > 0 ? ' · ปิกนิก ' + fmtInt(c.picPeople) + ' คน' : '') : (+c.people > 0 && c.linePeople === undefined ? ' · ' + fmtInt(c.people) + ' คน' : '')), c.labor], ['🏦 ดอกเบี้ย', c.interest], ['🔥 แก๊ส', c.gas], ['⚡ ค่าไฟ', c.elec], ['🚚 ขนส่ง', c.ship]];
+    ['👷 ค่าแรง' + (+c.fixedOther > 0 ? ' (รวมเงินเดือน)' : '') + (+c.linePeople > 0 ? ' · ไลน์ ' + fmtInt(c.linePeople) + ' คน' + (+c.picPeople > 0 ? ' · ปิกนิก ' + fmtInt(c.picPeople) + ' คน' : '') : (+c.people > 0 && c.linePeople === undefined ? ' · ' + fmtInt(c.people) + ' คน' : '')), c.labor], ['🏦 ดอกเบี้ย', c.interest], ['🔥 แก๊ส', c.gas], ['⚡ ค่าไฟ', c.elec], ['🚚 ขนส่ง', c.ship]];
   return [
     '💰 ต้นทุนผลิต' + (day === yesterday(today) ? 'เมื่อวาน' : '') + ' · ' + thDate(day),
     'ผลิต ' + fmtInt(c.packs) + ' แพ็ค · ' + fmtInt(c.pieces) + ' ชิ้น' + (kg > 0 ? ' · ' + fmtInt(kg) + ' กก.' : '') + ' · เดินเครื่อง ' + c.hours + ' ชม.',
