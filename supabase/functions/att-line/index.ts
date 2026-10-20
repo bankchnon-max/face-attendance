@@ -318,9 +318,9 @@ async function costCtx() {
   const { data: lab, error: labErr } = await admin.rpc('att_labor_daily_svc', { p_from: from.toISOString().slice(0, 10), p_to: today });
   if (!labErr) {
     LABOR = {};
-    (lab ?? []).forEach((x: Any) => { const k = String(x.day).slice(0, 10), e = LABOR[k] || (LABOR[k] = { total: 0, wage: 0, ot: 0, people: 0, units: 0, noWage: 0, noOut: 0, st: {}, stp: {} });
+    (lab ?? []).forEach((x: Any) => { const k = String(x.day).slice(0, 10), e = LABOR[k] || (LABOR[k] = { total: 0, wage: 0, ot: 0, people: 0, units: 0, noWage: 0, noOut: 0, st: {}, stp: {}, sto: {} });
       const b = r2((+x.wage_baht || 0) + (+x.ot_baht || 0)); e.total = r2(e.total + b); e.wage = r2(e.wage + (+x.wage_baht || 0)); e.ot = r2(e.ot + (+x.ot_baht || 0));
-      e.people += +x.people || 0; e.units += +x.day_units || 0; e.noWage += +x.no_wage || 0; e.noOut += +x.no_out || 0; e.st[x.station] = r2((e.st[x.station] || 0) + b); e.stp[x.station] = (e.stp[x.station] || 0) + (+x.people || 0); });
+      e.people += +x.people || 0; e.units += +x.day_units || 0; e.noWage += +x.no_wage || 0; e.noOut += +x.no_out || 0; e.st[x.station] = r2((e.st[x.station] || 0) + b); e.stp[x.station] = (e.stp[x.station] || 0) + (+x.people || 0); e.sto[x.station] = r2((e.sto[x.station] || 0) + (+x.ot_baht || 0)); });
   }
   const ctx = { S, PROD, PRICE, LABOR, KSET, GAS: COST.gasRateFrom(PROD, PRICE) };
   return { COST, ctx, today };
@@ -334,7 +334,7 @@ async function costMessage(pre?: Any, dayOverride?: string): Promise<string | nu
   const kg = (ctx.PROD.line || []).filter((l: Any) => String(l.time).slice(0, 10) === day)
     .reduce((a: number, l: Any) => a + Math.max(0, ((l.actualWeight != null ? +l.actualWeight : +l.stdPerPack) || 0) - (+l.bagKgPerPack || 0)), 0);
   const rows: [string, number][] = [['🧶 ใย ' + fmtInt(c.fiberKg) + ' กก.', c.fiber], ['🧵 ผ้า+ค่าเย็บ', c.fabric], ['📦 ถุงแพ็ค', c.bagPack], ['🛍️ ถุงซิล', c.bagZip],
-    ['👷 ค่าแรง' + (+c.fixedOther > 0 ? ' (รวมเงินเดือน)' : '') + (+c.linePeople > 0 ? ' · ไลน์ ' + fmtInt(c.linePeople) + ' คน' + (+c.picPeople > 0 ? ' · ปิกนิก ' + fmtInt(c.picPeople) + ' คน' : '') : (+c.people > 0 && c.linePeople === undefined ? ' · ' + fmtInt(c.people) + ' คน' : '')), c.labor], ['🏦 ดอกเบี้ย', c.interest], ['🔥 แก๊ส', c.gas], ['⚡ ค่าไฟ', c.elec], ['🚚 ขนส่ง', c.ship]];
+    ['👷 ค่าแรง' + (+c.fixedOther > 0 ? ' (รวมเงินเดือน)' : '') + (+c.otLabor > 0 ? ' (รวม OT ' + fmtBaht(c.otLabor) + ')' : '') + (+c.linePeople > 0 ? ' · ไลน์ ' + fmtInt(c.linePeople) + ' คน' + (+c.picPeople > 0 ? ' · ปิกนิก ' + fmtInt(c.picPeople) + ' คน' : '') : (+c.people > 0 && c.linePeople === undefined ? ' · ' + fmtInt(c.people) + ' คน' : '')), c.labor], ['🏦 ดอกเบี้ย', c.interest], ['🔥 แก๊ส', c.gas], ['⚡ ค่าไฟ', c.elec], ['🚚 ขนส่ง', c.ship]];
   return [
     '💰 ต้นทุนผลิต' + (day === yesterday(today) ? 'เมื่อวาน' : '') + ' · ' + thDate(day),
     'ผลิต ' + fmtInt(c.packs) + ' แพ็ค · ' + fmtInt(c.pieces) + ' ชิ้น' + (kg > 0 ? ' · ' + fmtInt(kg) + ' กก.' : '') + ' · เดินเครื่อง ' + c.hours + ' ชม.',
@@ -356,7 +356,7 @@ function plantLines(COST: Any, ctx: Any, day: string, c: Any): string[] {
       .reduce((a: number, l: Any) => a + Math.max(0, ((l.actualWeight != null ? +l.actualWeight : +l.stdPerPack) || 0) - (+l.bagKgPerPack || 0)), 0);
     const per = p === 'p1' ? (kg > 0 ? ' · ' + fmtInt(kg) + ' กก. · ' + fmtBaht(r2(x.total / kg)) + ' บาท/กก.' : '')
       : (x.pieces ? ' · ' + fmtInt(x.pieces) + ' ชิ้น · ' + fmtBaht(x.perPiece) + ' บาท/ชิ้น' : '');
-    const parts: [string, number][] = [['ใย', x.fiber], ['ผ้า+เย็บ', x.fabric], ['ถุง', r2((+x.bagPack || 0) + (+x.bagZip || 0))], ['ค่าแรง', x.labor],
+    const parts: [string, number][] = [['ใย', x.fiber], ['ผ้า+เย็บ', x.fabric], ['ถุง', r2((+x.bagPack || 0) + (+x.bagZip || 0))], ['ค่าแรง' + (+x.otLabor > 0 ? ' (OT ' + fmtInt(x.otLabor) + ')' : ''), x.labor],
       ['ดอกเบี้ย', x.interest], ['ไฟ', x.elec], ['ส่ง', x.ship], ['แก๊ส', x.gas]];
     out.push('🏭 ' + COST.PLANT_TH[p] + ' ' + fmtBaht(x.total) + ' บาท · ' + fmtInt(x.packs) + ' แพ็ค' + per + (+x.plantPeople > 0 ? ' · ' + (p === 'pic' ? 'แพ็ค ' : 'ไลน์ ') + (x.plantSplit ? '≈' : '') + Math.round(x.plantPeople * 10) / 10 + ' คน' : ''),
       '   ' + parts.filter(([, v]) => +v > 0).map(([k, v]) => k + ' ' + fmtInt(v)).join(' · '));
@@ -364,7 +364,7 @@ function plantLines(COST: Any, ctx: Any, day: string, c: Any): string[] {
   /* ตัดผ้า: กลุ่มแยก (ค่าแรงคนหน้างานตัดผ้า) · มูลค่าผ้าที่ตัดแสดงเฉยๆ ค่าผ้าคิดตอนเบิกปลอกไปผลิต */
   if (+c.cutPieces > 0 || +c.cutLabor > 0)
     out.push('✂️ ตัดผ้า ' + (+c.cutLabor > 0 ? fmtBaht(c.cutLabor) + ' บาท (ค่าแรงคนตัด) · ' : '') + fmtInt(c.cutPieces) + ' ชิ้น' + (c.cutRolls ? ' (' + c.cutRolls + ' ม้วน)' : '') +
-      (+c.cutPieces > 0 && +c.cutLabor > 0 ? ' · ' + fmtBaht(r2(c.cutLabor / c.cutPieces)) + ' บาท/ชิ้น' : '') + (+c.cutPeople > 0 ? ' · ' + fmtInt(c.cutPeople) + ' คน' : ''));
+      (+c.cutPieces > 0 && +c.cutLabor > 0 ? ' · ' + fmtBaht(r2(c.cutLabor / c.cutPieces)) + ' บาท/ชิ้น' : '') + (+c.cutPeople > 0 ? ' · ' + fmtInt(c.cutPeople) + ' คน' : '') + (+c.cutOt > 0 ? ' · รวม OT ' + fmtBaht(c.cutOt) : ''));
   return out.length ? ['', 'แยกโรง', ...out] : [];
 }
 async function alertsMessage(pre?: Any): Promise<string | null> {
