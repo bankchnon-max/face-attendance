@@ -546,6 +546,12 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
           <label class="f"><span>OT เย็นเริ่มนับหลังเลิกงาน (นาที) — เช่น 30 = เลิก 17:30 เริ่ม OT 18:00</span><input type="number" id="sOtAfter" min="0" max="180"></label>
           <label class="f"><span>ปัดเศษ OT ลงทีละ (นาที)</span>
             <select id="sOtRound"><option value="1">ไม่ปัด (นับทุกนาที)</option><option value="15">15 นาที</option><option value="30">30 นาที</option><option value="60">1 ชั่วโมง</option></select></label>
+          <h3>OT อิงแอพผลิต (คนหน้างานไลน์)</h3>
+          <label class="check"><input type="checkbox" id="sOtLine"><span>ใช้เวลาแพ็คจากแอพผลิต — <b>OT เย็น</b>ของคนหน้างานไลน์นับถึงแพ็คสุดท้ายของวัน + เวลาเก็บของ (ไม่เกินเวลาสแกนออก) · <b>OT เที่ยง</b>ของคนไลน์/ตัดผ้าที่สแกน OT เที่ยง ได้เต็มเวลาพักเมื่อไลน์มีแพ็คช่วงพัก (หลังเริ่มพัก 10 นาที) ไลน์ไม่เดิน = ไม่ได้ และลงต้นทุนหน้างานไลน์ · ไม่นับแพ็คปิกนิก · วันที่แอพผลิตไม่มีแพ็คเลย ใช้เวลาสแกนเหมือนเดิม · หน้างานอื่นคิดเหมือนเดิม</span></label>
+          <div class="range-row">
+            <label class="f" style="flex:1"><span>เริ่มใช้ตั้งแต่วันที่</span><input type="date" id="sOtLineFrom"></label>
+            <label class="f" style="flex:1"><span>เวลาเก็บของหลังแพ็คสุดท้าย (นาที)</span><input type="number" id="sOtLineBuf" min="0" max="120"></label>
+          </div>
           <label class="f"><span>ป้องกันสแกนซ้ำภายใน (วินาที)</span><input type="number" id="sCooldown" min="5" max="3600"></label>
           <label class="f"><span>ความเข้มงวดการจับคู่ใบหน้า: <b id="sThrLabel"></b></span>
             <div class="range-row"><span class="small muted">เข้มงวด</span><input type="range" id="sThr" min="0.35" max="0.65" step="0.01"><span class="small muted">ผ่อนปรน</span></div>
@@ -754,6 +760,8 @@ const DEFAULTS = {
   shiftStart: '08:30', shiftEnd: '17:30', grace: 5, cooldown: 60, threshold: 0.5, liveness: true, sound: true, voice: true,
   workDays: [1, 2, 3, 4, 5, 6], leaveQuota: { sick: 30, personal: 3, vacation: 6 }, lunchStart: '12:00', lunchEnd: '13:00', lunchScan: true, otAfter: 30, otRound: 30, halfDayHours: 5,
   payPeriods: { cutoffs: [5, 20] },
+  // OT อิงแอพผลิต: คนหน้างานไลน์ OT เย็นนับถึงแพ็คสุดท้าย + เวลาเก็บของ · OT เที่ยง (ไลน์/ตัดผ้า) ได้เมื่อไลน์เดินช่วงพักเที่ยง
+  otByLine: false, otByLineFrom: '', otLineBuffer: 15,
   payroll: { hoursPerDay: 8, otMult: 1.5, holidayMult: 2, holidayOtMult: 3, payLeave: true, sso: true, ssoRate: 5, ssoMinBase: 1650, ssoMaxBase: 17500, diligence: 0, diligenceSso: true },
   // หน้างานที่ให้เลือกตอนสแกนเข้างาน (ใช้แบ่งค่าแรงลงต้นทุนในแอพต้นทุน)
   stationPick: true, stationWait: 15,
@@ -796,9 +804,36 @@ function mergeEvents(list) {
   list.forEach(e => { const old = byId.get(e.id); byId.set(e.id, old ? { ...old, ...e, snap: e.snap ?? old.snap } : e); });
   events = [...byId.values()].sort((a, b) => a.time - b.time);
 }
+// Line pack times per day from the production app (only when "OT อิงแอพผลิต" is on):
+// { packs, last: minute of the last pack, lunchPacks, lunchRan: the line packed during the lunch break }
+// The current month is re-read every 5 minutes so today's last pack stays fresh.
+let lineTimes = {};
+const lineLoads = new Map(), lineOk = new Set(), lineFailedAt = new Map();
+const lineRuleOn = key => !!settings.otByLine && !(settings.otByLineFrom && key < settings.otByLineFrom);
+function lineStale(month) {
+  if (!settings.otByLine || Date.now() - (lineFailedAt.get(month) || 0) < 30000) return false;
+  const l = lineLoads.get(month);
+  return !l || (month === dayKey(Date.now()).slice(0, 7) && Date.now() - l.at > 300000);
+}
+function ensureLineTimes(month) {
+  if (!lineStale(month)) return lineLoads.get(month)?.p || Promise.resolve(false);
+  const [from, to] = monthRange(month);
+  const p = sb.rpc('att_line_times', { p_from: from, p_to: to }).then(({ data, error }) => {
+    if (error) throw error;
+    for (const k of keysBetween(from, to)) delete lineTimes[k];
+    (data || []).forEach(r => { lineTimes[r.day] = { packs: Number(r.packs) || 0, last: r.last_min == null ? null : Number(r.last_min), lunchPacks: Number(r.lunch_packs) || 0, lunchRan: !!r.lunch_ran }; });
+    lineOk.add(month); return true;
+  }).catch(() => { lineLoads.delete(month); lineFailedAt.set(month, Date.now()); return false; });
+  lineLoads.set(month, { at: Date.now(), p });
+  return p;
+}
 // Events are loaded one month at a time (without photos) to keep things fast
 const monthLoads = new Map(), monthFailedAt = new Map();
 function ensureMonth(month) {
+  const ev = loadMonthEvents(month);
+  return settings.otByLine ? Promise.all([ev, ensureLineTimes(month)]).then(r => r[0]) : ev;
+}
+function loadMonthEvents(month) {
   if (monthLoads.has(month)) return monthLoads.get(month);
   const [y, m] = month.split('-').map(Number);
   const from = new Date(y, m - 1, 1).toISOString(), to = new Date(y, m, 1).toISOString();
@@ -821,6 +856,7 @@ function ensureSnaps(key) {
 // Make sure the data a view needs is loaded, then re-render it once
 function needData(months, snapDay, rerender) {
   const waits = months.filter(m => !monthLoads.has(m) && Date.now() - (monthFailedAt.get(m) || 0) > 30000).map(ensureMonth);
+  months.filter(lineStale).forEach(m => waits.push(ensureLineTimes(m)));
   if (snapDay && !snapLoads.has(snapDay)) waits.push(ensureSnaps(snapDay));
   if (waits.length) Promise.all(waits).then(rs => { if (rs.some(Boolean)) rerender(); });
 }
@@ -990,6 +1026,7 @@ function lateMinutes(t) {
 const minOfDay = t => { const d = new Date(t); return d.getHours() * 60 + d.getMinutes(); };
 const roundDown = (min, step) => step > 1 ? Math.floor(min / step) * step : Math.floor(min);
 const lunchMinutes = () => Math.max(0, minutesOf(settings.lunchEnd) - minutesOf(settings.lunchStart));
+const hmMin = m => `${pad(Math.floor(m / 60))}:${pad(m % 60)}`;
 const DAY_TYPE_LABEL = { work: 'วันทำงาน', off: 'วันหยุดโรงงาน' };
 // Factory day type: 'work' or 'off'. Specific calendar entries win over the weekly pattern.
 // Nobody is ever marked absent — we only count the days each person actually came, so staff can rotate days off freely.
@@ -1000,6 +1037,7 @@ function dayInfo(key) {
   return { type, work: type === 'work', note: o?.note || '', special: !!o, weekly, paid: type === 'off' && !!o?.paid };
 }
 function scheduledMin() { return Math.max(0, minutesOf(settings.shiftEnd) - minutesOf(settings.shiftStart) - lunchMinutes()); }
+const otLineRuleText = () => `OT อิงแอพผลิต${settings.otByLineFrom ? ' (ตั้งแต่ ' + settings.otByLineFrom + ')' : ''}: คนหน้างานไลน์ OT เย็นนับถึงแพ็คสุดท้าย + ${Number(settings.otLineBuffer ?? 15)} นาที · OT เที่ยงคนไลน์/ตัดผ้า ได้เมื่อไลน์เดินช่วงพัก`;
 function inLunchWindow(t = Date.now()) { const m = minOfDay(t); return m >= minutesOf(settings.lunchStart) && m < minutesOf(settings.lunchEnd); }
 function daySummary(emp, key) {
   const info = dayInfo(key), today = dayKey(Date.now());
@@ -1018,14 +1056,26 @@ function daySummary(emp, key) {
     const lunchOverlap = Math.max(0, Math.min(minOfDay(lastOut), minutesOf(settings.lunchEnd)) - Math.max(minOfDay(firstIn), minutesOf(settings.lunchStart)));
     workedMin = Math.max(0, Math.round(raw - lunchOverlap));
   }
-  const lunchMin = present && evs.some(e => e.type === 'lunch') ? lunchMinutes() : 0;
+  // OT อิงแอพผลิต: วันที่เปิดใช้และไลน์มีแพ็ค (ไม่มีแพ็คเลย = ใช้เวลาสแกนเหมือนเดิม)
+  const marks = present ? evs.filter(e => (e.type === 'in' || e.type === 'move') && e.time >= firstIn) : [];
+  const firstSt = ins[0]?.station || '', markSt = marks.length ? marks[marks.length - 1].station || '' : '';
+  const endSt = markSt || firstSt;
+  const ruleDay = present && lineRuleOn(key);
+  const lt = ruleDay && lineTimes[key]?.packs > 0 ? lineTimes[key] : null;
+  const lineUnknown = ruleDay && !lineOk.has(key.slice(0, 7));
+  const lunchScanned = present && evs.some(e => e.type === 'lunch');
+  const lunchByLine = ruleDay && (['line', 'cut'].includes(firstSt) || ['line', 'cut'].includes(markSt));
+  // OT เที่ยงของคนไลน์/ตัดผ้า: ได้เต็มเวลาพักเมื่อไลน์มีแพ็คช่วงพักเที่ยง (ลงต้นทุนไลน์) · ไลน์ไม่เดิน = ไม่ได้
+  const lunchLine = lunchScanned && lunchByLine && !!lt && lt.lunchRan;
+  const lunchNoLine = lunchScanned && lunchByLine && !!lt && !lt.lunchRan;
+  const lunchMin = lunchScanned && !lunchNoLine ? lunchMinutes() : 0;
   // Half day: arriving from lunch time on = afternoon half (late is measured from the end of lunch);
   // working less than the half-day threshold = counted as 0.5 day
   const afternoon = present && minOfDay(firstIn) >= minutesOf(settings.lunchStart);
   const halfUnder = Number(settings.halfDayHours) * 60;
   const half = present && (afternoon || (halfUnder > 0 && workedMin != null && workedMin < halfUnder));
   const dayValue = !present ? 0 : half ? 0.5 : 1;
-  let late = 0, early = 0, otMin = 0, regularMin = 0;
+  let late = 0, early = 0, otMin = 0, regularMin = 0, otCap = null, otCut = 0;
   if (present && info.work) {
     if (afternoon) { const m = minOfDay(firstIn), start = minutesOf(settings.lunchEnd); late = m > start + Number(settings.grace) ? m - start : 0; }
     else late = lateMinutes(firstIn);
@@ -1033,7 +1083,11 @@ function daySummary(emp, key) {
   if (lastOut) {
     const outM = minOfDay(lastOut), end = minutesOf(settings.shiftEnd);
     early = info.work && !half ? Math.max(0, end - outM) : 0;
-    otMin = roundDown(Math.max(0, outM - (end + Number(settings.otAfter))), Number(settings.otRound));
+    // คนหน้างานไลน์: OT เย็นนับถึงแพ็คสุดท้ายของไลน์ + เวลาเก็บของ (ไม่เกินเวลาสแกนออก)
+    otCap = lt && endSt === 'line' && lt.last != null ? lt.last + Number(settings.otLineBuffer ?? 15) : null;
+    const otOf = m => roundDown(Math.max(0, m - (end + Number(settings.otAfter))), Number(settings.otRound));
+    otMin = otOf(otCap == null ? outM : Math.min(outM, otCap));
+    otCut = otOf(outM) - otMin;
   }
   if (workedMin != null) regularMin = Math.min(scheduledMin(), Math.max(0, workedMin - otMin));
   const missingOut = present && !lastOut && isPast;
@@ -1047,6 +1101,9 @@ function daySummary(emp, key) {
   if (half) { status = (afternoon ? 'ครึ่งวันบ่าย' : 'ครึ่งวันเช้า') + (status === 'ตรงเวลา' ? '' : ' · ' + status); if (cls === 'b-ok') cls = 'b-info'; }
   if (lastOut && early > 0) status += ` · ออกก่อน ${early} นาที`;
   if (missingOut) { status += ' · ไม่สแกนออก'; if (cls === 'b-ok') cls = 'b-warn'; }
+  if (otCut > 0) status += ` · OT นับถึงแพ็คสุดท้าย ${hmMin(lt.last)}+${Number(settings.otLineBuffer ?? 15)} นาที`;
+  if (lunchNoLine) status += ' · OT เที่ยงไม่นับ (ไลน์ไม่ได้เดินช่วงพัก)';
+  if (lineUnknown && (lunchScanned || lastOut)) status += ' · ⚠ ยังโหลดเวลาแพ็คจากแอพผลิตไม่ได้';
   const leave = info.work ? leaveOn(emp.id, key) : null;
   const leaveValue = leave ? (leave.part === 'full' ? 1 : 0.5) : 0;
   if (leave) {
@@ -1054,7 +1111,7 @@ function daySummary(emp, key) {
     if (!present) { status = label; cls = 'b-info'; }
     else status += ' · ' + label;
   }
-  return { key, info, firstIn, lastOut, late, early, workedMin, regularMin, otMin, lunchMin, present, half, afternoon, dayValue, leave, leaveValue, scheduled: info.work, missingOut, status, cls, evs };
+  return { key, info, firstIn, lastOut, late, early, workedMin, regularMin, otMin, lunchMin, lunchLine, lunchNoLine, lunchByLine, otCap, otCut, present, half, afternoon, dayValue, leave, leaveValue, scheduled: info.work, missingOut, status, cls, evs };
 }
 const LEAVE_TYPES = { sick: 'ลาป่วย', personal: 'ลากิจ', vacation: 'ลาพักร้อน', other: 'ลาอื่นๆ' };
 const PART_LABEL = { full: 'เต็มวัน', am: 'ครึ่งเช้า', pm: 'ครึ่งบ่าย' };
@@ -1155,12 +1212,14 @@ function stationCostsRange(from, to) {
       if (!sd.present) continue;
       const { parts, last } = stationSplit(emp, key, sd);
       const dayPay = sd.dayValue * wage * (sd.info.work ? 1 : p.holidayMult);
-      const otPay = (sd.otMin + sd.lunchMin) / 60 * hourly * (sd.info.work ? p.otMult : p.holidayOtMult);
+      const otRate = hourly * (sd.info.work ? p.otMult : p.holidayOtMult);
       for (const x of parts) {
         for (const map of [rows, mine]) { add(map, x.st, 'days', sd.dayValue * x.share); add(map, x.st, 'min', x.min); add(map, x.st, 'pay', dayPay * x.share); }
       }
-      // evening OT time is already inside the station minutes (scan-in to scan-out); lunch OT is not
-      for (const map of [rows, mine]) { add(map, last, 'pay', otPay); add(map, last, 'min', sd.lunchMin); }
+      // evening OT time is already inside the station minutes (scan-in to scan-out); lunch OT is not.
+      // Lunch OT earned because the line ran over lunch is charged to the line (cutters covering the line at lunch)
+      const lunchSt = sd.lunchLine ? 'line' : last;
+      for (const map of [rows, mine]) { add(map, last, 'pay', sd.otMin / 60 * otRate); add(map, lunchSt, 'pay', sd.lunchMin / 60 * otRate); add(map, lunchSt, 'min', sd.lunchMin); }
     }
     for (const [st, r] of mine) detail.push({ emp, st, ...r, pay: baht(r.pay) });
   }
@@ -1759,7 +1818,7 @@ function showResult(emp, res) {
     const typ = TYPE_LABEL[ev.type];
     let badge;
     if (ev.type === 'move') badge = '';   /* the station picker below says the rest */
-    else if (ev.type === 'lunch') badge = `<span class="badge b-info">+${fmtMin(s.lunchMin)}</span>`;
+    else if (ev.type === 'lunch') badge = s.lunchByLine && !s.lunchLine ? `<span class="badge b-info">+${fmtMin(lunchMinutes())} ถ้าไลน์เดินช่วงพัก</span>` : `<span class="badge b-info">+${fmtMin(s.lunchMin)}</span>`;
     else if (s.info.type === 'off') badge = '<span class="badge b-info">ทำงานวันหยุด</span>';
     else if (ev.type === 'in') badge = (s.afternoon ? '<span class="badge b-info">ครึ่งวันบ่าย</span> ' : '') + (s.late ? `<span class="badge b-warn">สาย ${s.late} นาที</span>` : s.afternoon ? '' : '<span class="badge b-ok">ตรงเวลา</span>');
     else badge = s.otMin ? `<span class="badge b-info">OT เย็น ${fmtMin(s.otMin)}</span>` : s.half ? '<span class="badge b-info">ครึ่งวัน</span>' : '<span class="badge b-info">ออกงาน</span>';
@@ -1971,7 +2030,7 @@ function renderMonthSummary() {
   const label = new Date(y, mo - 1, 1).toLocaleDateString('th-TH', { month: 'long', year: 'numeric' });
   $('#mInfo').innerHTML = `${label} — นับเฉพาะวันที่มาทำงานจริง (สลับกันหยุดได้ ไม่นับเป็นขาด) · ตัวเลขนับถึงวันนี้<br>`
     + `ครึ่งวัน (0.5 วัน) = เข้างานตั้งแต่ ${esc(settings.lunchStart)} หรือทำงานไม่ถึง ${esc(settings.halfDayHours)} ชม.<br>`
-    + `OT เที่ยง = ${fmtMin(lunchMinutes())}/ครั้ง (${esc(settings.lunchStart)}–${esc(settings.lunchEnd)}) · OT เย็นเริ่มหลังเลิกงาน ${esc(settings.otAfter)} นาที ปัดลงทีละ ${esc(settings.otRound)} นาที`;
+    + `OT เที่ยง = ${fmtMin(lunchMinutes())}/ครั้ง (${esc(settings.lunchStart)}–${esc(settings.lunchEnd)}) · OT เย็นเริ่มหลังเลิกงาน ${esc(settings.otAfter)} นาที ปัดลงทีละ ${esc(settings.otRound)} นาที` + (settings.otByLine ? '<br>' + esc(otLineRuleText()) : '');
   $('#mBody').innerHTML = employees.length ? employees.map(e => {
     const r = monthSummary(e, m), pay = payrollFor(e, m);
     return `<tr><td>${esc(e.name)}</td><td>${esc(e.dept || '-')}</td>
@@ -2091,7 +2150,7 @@ async function exportPayroll({ from, to, half, label, file, whole }) {
   await Promise.all([loadExcelJS(), ...[...new Set([from.slice(0, 7), to.slice(0, 7)])].map(ensureMonth)]);
   const today = dayKey(Date.now()), dayKeys = keysBetween(from, to), days = dayKeys.length;
   const upTo = to <= today ? whole : `ถึงวันที่ ${new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })}`;
-  const rules = `เข้างาน ${settings.shiftStart} เลิก ${settings.shiftEnd} · ครึ่งวัน = เข้าตั้งแต่ ${settings.lunchStart} หรือทำไม่ถึง ${settings.halfDayHours} ชม. · OT เที่ยง ${fmtMin(lunchMinutes())}/ครั้ง · OT เย็นเริ่มหลังเลิกงาน ${settings.otAfter} นาที ปัดลงทีละ ${settings.otRound} นาที`;
+  const rules = `เข้างาน ${settings.shiftStart} เลิก ${settings.shiftEnd} · ครึ่งวัน = เข้าตั้งแต่ ${settings.lunchStart} หรือทำไม่ถึง ${settings.halfDayHours} ชม. · OT เที่ยง ${fmtMin(lunchMinutes())}/ครั้ง · OT เย็นเริ่มหลังเลิกงาน ${settings.otAfter} นาที ปัดลงทีละ ${settings.otRound} นาที` + (settings.otByLine ? ' · ' + otLineRuleText() : '');
   const wb = new ExcelJS.Workbook();
   wb.creator = 'ระบบลงเวลาใบหน้า'; wb.created = new Date();
 
@@ -2452,6 +2511,7 @@ function renderSettings() {
   $('#sGrace').value = settings.grace; $('#sCooldown').value = settings.cooldown;
   $('#sThr').value = settings.threshold; $('#sThrLabel').textContent = Number(settings.threshold).toFixed(2);
   $('#sLunchStart').value = settings.lunchStart; $('#sLunchEnd').value = settings.lunchEnd; $('#sLunchScan').checked = settings.lunchScan; $('#sOtAfter').value = settings.otAfter; $('#sOtRound').value = String(settings.otRound); $('#sHalf').value = settings.halfDayHours;
+  $('#sOtLine').checked = !!settings.otByLine; $('#sOtLineFrom').value = settings.otByLineFrom || ''; $('#sOtLineBuf').value = settings.otLineBuffer ?? 15;
   $('#sLive').checked = settings.liveness; $('#sSound').checked = settings.sound; $('#sVoice').checked = settings.voice;
   $('#sDataStats').innerHTML = [['พนักงาน', employees.length], ['รายการลงเวลา (ที่โหลด)', events.length], ['รอส่งขึ้นระบบ', outbox.length]]
     .map(([l, n]) => `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
@@ -2462,10 +2522,12 @@ $('#settingsForm').addEventListener('submit', ev => {
   settings = {
     ...settings,
     lunchStart: $('#sLunchStart').value || DEFAULTS.lunchStart, lunchEnd: $('#sLunchEnd').value || DEFAULTS.lunchEnd, lunchScan: $('#sLunchScan').checked, otAfter: Math.max(0, Number($('#sOtAfter').value) || 0), otRound: Number($('#sOtRound').value) || 1, halfDayHours: Math.max(0, Number($('#sHalf').value) || 0),
+    otByLine: $('#sOtLine').checked, otByLineFrom: $('#sOtLineFrom').value || '', otLineBuffer: Math.min(120, Math.max(0, Number($('#sOtLineBuf').value) || 0)),
     shiftStart: $('#sStart').value || DEFAULTS.shiftStart, shiftEnd: $('#sEnd').value || DEFAULTS.shiftEnd,
     grace: Math.max(0, Number($('#sGrace').value) || 0), cooldown: Math.max(5, Number($('#sCooldown').value) || 60),
     threshold: Number($('#sThr').value), liveness: $('#sLive').checked, sound: $('#sSound').checked, voice: $('#sVoice').checked
   };
+  lineLoads.clear(); lineOk.clear(); lineFailedAt.clear();   // โหลดเวลาไลน์ใหม่ตามค่าที่เปลี่ยน
   buildMatcher(); saveSettings().then(ok => ok && toast('บันทึกการตั้งค่าแล้ว', 'ok'));
 });
 $('#btnBackup').addEventListener('click', async () => {
