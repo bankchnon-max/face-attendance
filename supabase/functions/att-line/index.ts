@@ -244,11 +244,21 @@ async function stockMessage(): Promise<string | null> {
     .filter((x) => +T.fabricRolls > 0 && x.n <= +T.fabricRolls).map((x) => `• ${x.t} เหลือ ${x.n} ม้วน (เตือนไม่เกิน ${+T.fabricRolls})`);
   if (fabLow.length) lines.push('🧵 ผ้า', ...fabLow);
   // ถุง
-  const wdBySack: Record<string, number> = {};
-  feed.bagWd.forEach((w: Any) => (w.picks || []).forEach((p: Any) => { wdBySack[p.sackId] = (wdBySack[p.sackId] || 0) + (+p.kg || 0); }));
+  /* ชั่งกระสอบจริงตอนเบิก (picks[].weighedKg) → น้ำหนักกระสอบจริง = เบิกก่อนหน้า + ที่ชั่งได้ (แบบเดียวกับแอพสต๊อก) */
+  const wdBySack: Record<string, number> = {}, weighBySack: Record<string, { gross: number; time: string }> = {};
+  feed.bagWd.slice().sort((a: Any, b: Any) => String(a.time || '').localeCompare(String(b.time || ''))).forEach((w: Any) => (w.picks || []).forEach((p: Any) => {
+    const before = wdBySack[p.sackId] || 0;
+    if (+p.weighedKg > 0) weighBySack[p.sackId] = { gross: before + (+p.weighedKg), time: String(w.time || '') };
+    wdBySack[p.sackId] = before + (+p.kg || 0);
+  }));
   const agg: Record<string, { kind: string; name: string; kg: number; pcs: number }> = {};
   (bag.receipts || []).forEach((s: Any) => {
-    const k = s.kind + '|' + s.name, left = (+s.sackWeightKg || 0) - (wdBySack[s.id] || 0);
+    /* หักกระสอบเปล่า (sackTareKg ของกระสอบนั้น ไม่มี = 0.15 กก.) แบบเดียวกับแอพสต๊อก */
+    const tare = s.sackTareKg != null && s.sackTareKg !== '' ? Math.max(0, +s.sackTareKg || 0) : 0.15;
+    const wq = weighBySack[s.id], adjT = s.adjLog && s.adjLog.length ? String(s.adjLog[s.adjLog.length - 1].time || '') : '';
+    const gross = wq && !(adjT && adjT > wq.time) ? wq.gross : (+s.sackWeightKg || 0);
+    const rem = gross - (wdBySack[s.id] || 0);
+    const k = s.kind + '|' + s.name, left = rem > tare ? rem - tare : (rem >= 0 ? 0 : rem);
     const a = agg[k] || (agg[k] = { kind: s.kind, name: s.name, kg: 0, pcs: 0 });
     a.kg += left; if (+s.weightPerBag > 0) a.pcs += Math.round(Math.max(0, left) / +s.weightPerBag);
   });
@@ -311,6 +321,8 @@ async function costCtx() {
   const KSET: Any = Object.assign({ sewPerPiece: 0, sewBySize: {}, laborDaily: 0, laborHoursPerDay: 8, laborPerPiece: 0, elecPerHour: 0, shipPerPack: 0, fixed: [], hoursOverride: 0 }, st || {});
   const PRICE = Object.assign({ fiber: {}, fabric: {}, zip: {}, pack: {}, gas: 0 }, pr || {});
   const COST = await loadCostCore(S);
+  /* น้ำหนักกระสอบถุงที่ชั่งจริงตอนเบิก (แอพต้นทุนรุ่นที่มี sackActual) — ราคาถุงต่อใบตรงกับแอพต้นทุน */
+  if (COST.sackActual) S.sackReceipts = COST.sackActual(S.sackReceipts, PROD.bagWd);
   KSET._hoursPerMonth = +KSET.hoursOverride > 0 ? +KSET.hoursOverride : Math.max(COST.hoursPerMonth(PROD.line), r2((+KSET.laborHoursPerDay || 8) * 26));
   /* ค่าแรงรวมต่อวัน (ต่อหน้างาน ไม่ใช่รายคน) จากแอพสแกนหน้า — 40 วันล่าสุด */
   const today = bkk(new Date()).key, from = new Date(today + 'T00:00:00Z'); from.setUTCDate(from.getUTCDate() - 40);
