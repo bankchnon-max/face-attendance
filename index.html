@@ -267,7 +267,7 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
     <nav id="nav">
       <button data-view="kiosk" class="active">สแกนเข้างาน</button>
       <button data-view="employees">พนักงาน</button>
-      <button data-view="reports">รายงาน</button>
+      <button data-view="reports">รายงาน<span class="nav-badge" id="advBadge" hidden></span></button>
       <button data-view="leaves">การลา<span class="nav-badge" id="leaveBadge" hidden></span></button>
       <button data-view="calendar">ปฏิทินงาน</button>
       <button data-view="settings">ตั้งค่า</button>
@@ -329,6 +329,7 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
           <button class="btn" id="btnMove">🔁 ย้ายหน้างาน</button>
           <button class="btn" id="btnOutNow">🏠 เลิกงาน (กลับก่อน)</button>
           <button class="btn primary" id="btnLeave">ขอลา</button>
+          <button class="btn primary" id="btnAdv">💵 ขอเบิกเงิน</button>
           <button class="btn" id="btnManual">สแกนไม่ผ่าน? ลงเวลาด้วยการเลือกชื่อ</button>
           <button class="btn" id="btnFull">เต็มจอ</button>
         </div>
@@ -379,6 +380,12 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
 
   <!-- REPORTS -->
   <section class="view" id="view-reports">
+    <div class="card" style="margin-bottom:20px" id="advCard">
+      <h2>คำขอเบิกเงินจากเครื่องสแกน <span class="muted small" id="advCount"></span></h2>
+      <div class="list" id="advPend"></div>
+      <details style="margin-top:10px"><summary class="small muted" style="cursor:pointer">ที่ตัดสินแล้ว 60 วันล่าสุด</summary><div class="list" id="advDone" style="margin-top:8px"></div></details>
+      <p class="small muted" style="margin:8px 0 0">อนุมัติแล้ว = ลงเป็น "เบิกล่วงหน้า" ของงวดที่มีวันที่ขอ (หักจากรับสุทธิ) · แก้จำนวนเงินก่อนกดอนุมัติได้ · ลบภายหลังได้ที่ปุ่ม "เบิก / เบี้ยขยัน" ในงวดจ่ายเงิน</p>
+    </div>
     <div class="card" style="margin-bottom:20px">
       <h2>งวดจ่ายเงิน</h2>
       <div class="toolbar">
@@ -733,7 +740,7 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
 
 <dialog id="leaveDlg" class="wide">
   <div id="lvStep1">
-    <h2 style="margin:0 0 10px;font-size:17px">ขอลา — ยืนยันตัวตน</h2>
+    <h2 style="margin:0 0 10px;font-size:17px" id="lvTitle1">ขอลา — ยืนยันตัวตน</h2>
     <div class="cam mini"><video id="lvVideo" playsinline muted></video></div>
     <div class="status info" id="lvStatus" style="font-size:15px">มองกล้อง แล้วหันหน้าไปด้านข้างเล็กน้อยเพื่อยืนยันตัวตน</div>
     <div id="lvPickWrap" hidden>
@@ -760,6 +767,16 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
     <div class="actions" style="justify-content:flex-end">
       <button type="button" class="btn" id="lvCancel2">ยกเลิก</button>
       <button type="submit" class="btn primary" id="lvSubmit">ส่งคำขอลา</button>
+    </div>
+  </form>
+  <form id="advForm" hidden autocomplete="off">
+    <div class="lv-card" style="margin-bottom:14px"><img id="advImg" alt=""><div class="grow"><b id="advName"></b><div class="small muted" id="advVia"></div></div></div>
+    <label class="f"><span>ขอเบิกเงิน (บาท)</span><input type="number" id="advAmount" min="1" max="100000" step="1" inputmode="numeric" required style="font-size:22px"></label>
+    <label class="f"><span>เหตุผล (ไม่ใส่ก็ได้)</span><input type="text" id="advReason" maxlength="200" placeholder="เช่น ค่าเทอมลูก, ค่ารักษา"></label>
+    <div class="muted small">ส่งให้ HR อนุมัติ — อนุมัติแล้วจะหักจากเงินงวดนี้</div>
+    <div class="actions" style="justify-content:flex-end">
+      <button type="button" class="btn" id="advCancel">ยกเลิก</button>
+      <button type="submit" class="btn primary" id="advSubmit">ส่งคำขอเบิก</button>
     </div>
   </form>
 </dialog>
@@ -810,6 +827,9 @@ let payItems = [];    // diligence allowance (+) and salary advances (−), coun
 const itemFromRow = r => ({ id: r.id, empId: r.emp_id, day: r.day, kind: r.kind, amount: Number(r.amount), note: r.note || '' });
 const ITEM_KIND = { diligence: 'เบี้ยขยัน', advance: 'เบิกล่วงหน้า' };
 let leaves = [];      // leave requests (HR only; the kiosk can file but not read them)
+let advReqs = [];     // salary-advance requests from the kiosk, last 60 days + pending (HR only; the kiosk can file but not read them)
+const advFromRow = r => ({ id: r.id, empId: r.emp_id, amount: Number(r.amount), reason: r.reason || '', snap: r.snap || null, status: r.status,
+  requestedAt: ms(r.requested_at), decidedAt: r.decided_at ? ms(r.decided_at) : null, note: r.decision_note || '', approvedAmount: r.approved_amount == null ? null : Number(r.approved_amount) });
 let calendar = {};    // { 'YYYY-MM-DD': { type: 'work'|'off', note } } overrides the weekly pattern
 let currentUser = null;
 let currentRole = 'kiosk';   // 'hr' or 'kiosk' (scan only); the database enforces the same rules
@@ -897,13 +917,14 @@ function needData(months, snapDay, rerender) {
   if (waits.length) Promise.all(waits).then(rs => { if (rs.some(Boolean)) rerender(); });
 }
 async function loadAll() {
-  const [emps, cal, set, lv, wg, pi] = await Promise.all([
+  const [emps, cal, set, lv, wg, pi, adv] = await Promise.all([
     fetchAll(() => sb.from('att_employees').select('*').order('name')),
     fetchAll(() => sb.from('att_calendar').select('*')),
     sb.from('att_settings').select('data').eq('id', 1).maybeSingle(),
     currentRole === 'hr' ? fetchAll(() => sb.from('att_leaves').select('*').order('start_date')) : Promise.resolve([]),
     currentRole === 'hr' ? fetchAll(() => sb.from('att_wages').select('emp_id, daily_wage')) : Promise.resolve([]),
-    currentRole === 'hr' ? fetchAll(() => sb.from('att_pay_items').select('id, emp_id, day, kind, amount, note').order('day')) : Promise.resolve([])
+    currentRole === 'hr' ? fetchAll(() => sb.from('att_pay_items').select('id, emp_id, day, kind, amount, note').order('day')) : Promise.resolve([]),
+    currentRole === 'hr' ? fetchAll(() => sb.from('att_advance_requests').select('*').gte('requested_at', new Date(Date.now() - 60 * 86400000).toISOString()).order('requested_at')).catch(() => []) : Promise.resolve([])
   ]);
   if (set.error) throw set.error;
   employees = emps.map(empFromRow);
@@ -911,6 +932,7 @@ async function loadAll() {
   wages = Object.fromEntries(wg.map(r => [r.emp_id, Number(r.daily_wage)]));
   leaves = lv.map(leaveFromRow);
   payItems = pi.map(itemFromRow);
+  advReqs = adv.map(advFromRow);
   settings = { ...DEFAULTS, ...(set.data?.data || {}) };
   settings.payroll = { ...DEFAULTS.payroll, ...(set.data?.data?.payroll || {}) };
   const today = dayKey(Date.now());
@@ -1004,6 +1026,11 @@ function subscribeRealtime() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'att_leaves' }, p => {
       leaves = p.eventType === 'DELETE' ? leaves.filter(l => l.id !== p.old.id)
         : [...leaves.filter(l => l.id !== p.new.id), leaveFromRow(p.new)];
+      refreshView();
+    })
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'att_advance_requests' }, p => {
+      advReqs = advReqs.filter(x => x.id !== (p.old?.id || p.new?.id));
+      if (p.eventType !== 'DELETE') advReqs.push(advFromRow(p.new));
       refreshView();
     })
     .on('postgres_changes', { event: '*', schema: 'public', table: 'att_wages' }, p => {
@@ -2010,7 +2037,53 @@ const fmtMin = m => { if (m == null) return '-'; m = Math.round(m); return m % 6
 const toH = m => (Math.round(m) / 60).toFixed(2);
 const statCards = list => list.map(([l, n]) => `<div class="stat"><div class="n">${n}</div><div class="l">${l}</div></div>`).join('');
 const dayTypeBadge = info => `<span class="badge ${info.work ? 'b-ok' : 'b-mute'}">${DAY_TYPE_LABEL[info.type]}</span>${info.note ? ` <span class="small muted">${esc(info.note)}</span>` : ''}`;
+const fmtTime = t => new Date(t).toLocaleString('th-TH', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+function renderAdvReqs() {
+  const pend = advReqs.filter(x => x.status === 'pending').sort((a, b) => a.requestedAt - b.requestedAt);
+  const done = advReqs.filter(x => x.status !== 'pending').sort((a, b) => (b.decidedAt || 0) - (a.decidedAt || 0));
+  $('#advCount').textContent = pend.length ? `(รออนุมัติ ${pend.length})` : '';
+  $('#advPend').innerHTML = pend.length ? pend.map(x => {
+    const e = empById(x.empId), img = x.snap || e?.photo;
+    return `<div class="lv-card">${img ? `<img src="${esc(img)}" alt="">` : '<div class="avatar"></div>'}
+      <div class="grow"><b>${esc(e ? e.name : '(ลบแล้ว)')}</b> <span class="badge b-warn">ขอเบิก ${fmtBaht(x.amount)}</span>
+        <div class="small muted">ขอเมื่อ ${fmtTime(x.requestedAt)}</div>
+        ${x.reason ? `<div class="small">"${esc(x.reason)}"</div>` : ''}
+        <div class="actions" style="margin-top:6px;align-items:center">
+          <label class="small" style="display:flex;align-items:center;gap:6px">อนุมัติ <input type="number" data-advamt="${x.id}" value="${x.amount}" min="1" max="999999" step="1" style="width:110px"> บาท</label>
+          <button class="btn sm primary" data-advok="${x.id}">✅ อนุมัติ</button>
+          <button class="btn sm" data-advno="${x.id}">❌ ไม่อนุมัติ</button>
+        </div></div></div>`;
+  }).join('') : '<div class="empty small">ไม่มีคำขอเบิกรออนุมัติ</div>';
+  $('#advDone').innerHTML = done.length ? done.map(x => {
+    const e = empById(x.empId), ok = x.status === 'approved';
+    return `<div class="row"><div class="grow">${esc(e ? e.name : '(ลบแล้ว)')} · ขอ ${fmtBaht(x.amount)} · ${fmtTime(x.requestedAt)}${x.note ? ` · <span class="muted">${esc(x.note)}</span>` : ''}</div>
+      <span class="badge ${ok ? 'b-ok' : 'b-err'}">${ok ? 'อนุมัติ ' + fmtBaht(x.approvedAmount ?? x.amount) : 'ไม่อนุมัติ'}</span></div>`;
+  }).join('') : '<div class="empty small">ยังไม่มี</div>';
+}
+$('#advPend').addEventListener('click', async ev => {
+  const okB = ev.target.closest('[data-advok]'), noB = ev.target.closest('[data-advno]'); if (!okB && !noB) return;
+  const id = (okB || noB).dataset.advok || (okB || noB).dataset.advno, x = advReqs.find(r => r.id === id); if (!x) return;
+  const e = empById(x.empId), name = e ? e.name : '';
+  let amount = null, note = null;
+  if (okB) {
+    amount = Math.round(Number(document.querySelector(`[data-advamt="${id}"]`).value));
+    if (!(amount >= 1 && amount < 1000000)) { toast('จำนวนเงินไม่ถูกต้อง', 'err'); return; }
+    if (!confirm(`อนุมัติให้ ${name} เบิก ${fmtBaht(amount)} บาท?\nจะหักจากเงินงวดที่มีวันที่ ${thShort(dayKey(x.requestedAt))}`)) return;
+    if (amount !== x.amount) note = `ขอ ${x.amount} อนุมัติ ${amount}`;
+  } else {
+    note = prompt(`ไม่อนุมัติคำขอเบิกของ ${name}\nเหตุผล (ไม่ใส่ก็ได้)`, '');
+    if (note === null) return;
+  }
+  (okB || noB).disabled = true;
+  const { data, error } = await sb.rpc('att_decide_advance', { p_id: id, p_approve: !!okB, p_amount: amount, p_note: note || null });
+  if (error) { (okB || noB).disabled = false; toast('บันทึกไม่สำเร็จ: ' + error.message, 'err'); return; }
+  x.status = okB ? 'approved' : 'rejected'; x.decidedAt = Date.now(); x.note = note || ''; x.approvedAmount = amount;
+  if (data && data.id) { payItems = [...payItems.filter(i => i.id !== data.id), itemFromRow(data)]; }
+  toast(okB ? `อนุมัติเบิก ${fmtBaht(amount)} บาท ให้ ${name} แล้ว` : 'ไม่อนุมัติแล้ว', 'ok');
+  renderReports(); renderLeaveBadge();
+});
 function renderReports() {
+  renderAdvReqs();
   renderPeriod();
   renderMonthSummary();
   renderEmpHistory();
@@ -2743,7 +2816,7 @@ $('#rMonth').value = dayKey(Date.now()).slice(0, 7);
 $('#hMonth').value = dayKey(Date.now()).slice(0, 7);
 
 /* ---------- leave: request at the kiosk, approve in HR ---------- */
-let leaveIdentify = null, lvEmp = null, lvSnap = null;
+let leaveIdentify = null, lvEmp = null, lvSnap = null, lvMode = 'leave';
 const leaveTypeOptions = () => Object.entries(LEAVE_TYPES).map(([k, v]) => `<option value="${k}">${v}</option>`).join('');
 $('#lvType').innerHTML = leaveTypeOptions(); $('#hlType').innerHTML = leaveTypeOptions();
 const fmtDate = k => new Date(k + 'T00:00:00').toLocaleDateString('th-TH', { day: 'numeric', month: 'short', year: '2-digit' });
@@ -2762,18 +2835,19 @@ function validLeave(start, end, part) {
 }
 
 /* kiosk dialog */
-function openLeaveDialog() {
-  lvEmp = null; lvSnap = null;
-  $('#lvStep1').hidden = false; $('#lvForm').hidden = true; $('#lvPickWrap').hidden = true; $('#lvPickOk').hidden = true; $('#lvPick').hidden = false;
+function openLeaveDialog(mode) {
+  lvEmp = null; lvSnap = null; lvMode = mode === 'adv' ? 'adv' : 'leave';
+  $('#lvTitle1').textContent = (lvMode === 'adv' ? 'ขอเบิกเงิน' : 'ขอลา') + ' — ยืนยันตัวตน';
+  $('#lvStep1').hidden = false; $('#lvForm').hidden = true; $('#advForm').hidden = true; $('#lvPickWrap').hidden = true; $('#lvPickOk').hidden = true; $('#lvPick').hidden = false;
   $('#lvStatus').className = 'status info'; $('#lvStatus').textContent = 'มองกล้อง แล้วหันหน้าไปด้านข้างเล็กน้อยเพื่อยืนยันตัวตน';
   $('#leaveDlg').showModal();
   if (stream && kioskOn) {
     $('#lvVideo').srcObject = stream; $('#lvVideo').play().catch(() => {});
     cand = null; pauseUntil = 0;
-    leaveIdentify = (emp, snap, via) => showLeaveForm(emp, snap, via);
+    leaveIdentify = (emp, snap, via) => showReqForm(emp, snap, via);
   } else showLeavePick();
 }
-function closeLeaveDialog() { leaveIdentify = null; $('#lvVideo').srcObject = null; if ($('#leaveDlg').open) $('#leaveDlg').close(); }
+function closeLeaveDialog() { leaveIdentify = null; lvEmp = null; $('#lvVideo').srcObject = null; if ($('#leaveDlg').open) $('#leaveDlg').close(); }
 function showLeavePick() {
   leaveIdentify = null;
   $('#lvPickWrap').hidden = false; $('#lvPickOk').hidden = false; $('#lvPick').hidden = true;
@@ -2799,7 +2873,38 @@ function showLeaveForm(emp, snap, via) {
   syncEnd('#lvPart', '#lvEndWrap', '#lvStart', '#lvEnd');
   beep(true);
 }
-$('#btnLeave').addEventListener('click', openLeaveDialog);
+$('#btnLeave').addEventListener('click', () => openLeaveDialog('leave'));
+$('#btnAdv').addEventListener('click', () => openLeaveDialog('adv'));
+const showReqForm = (emp, snap, via) => lvMode === 'adv' ? showAdvForm(emp, snap, via) : showLeaveForm(emp, snap, via);
+function showAdvForm(emp, snap, via) {
+  lvEmp = emp; lvSnap = snap;
+  $('#lvVideo').srcObject = null;
+  $('#lvStep1').hidden = true; $('#advForm').hidden = false;
+  $('#advImg').src = snap || emp.photo || ''; $('#advImg').style.visibility = (snap || emp.photo) ? 'visible' : 'hidden';
+  $('#advName').textContent = emp.name; $('#advVia').textContent = via;
+  $('#advAmount').value = ''; $('#advReason').value = '';
+  beep(true); setTimeout(() => $('#advAmount').focus(), 50);
+}
+$('#advCancel').addEventListener('click', closeLeaveDialog);
+$('#advForm').addEventListener('submit', async ev => {
+  ev.preventDefault();
+  if (!lvEmp) return;
+  const amount = Math.round(Number($('#advAmount').value));
+  if (!(amount >= 1 && amount <= 100000)) { toast('ใส่จำนวนเงิน 1 – 100,000 บาท', 'err'); return; }
+  $('#advSubmit').disabled = true;
+  const row = { id: uid(), emp_id: lvEmp.id, amount, reason: $('#advReason').value.trim() || null, status: 'pending', snap: lvSnap };
+  const { error } = await sb.from('att_advance_requests').insert(row);
+  $('#advSubmit').disabled = false;
+  if (error) { toast(navigator.onLine ? 'ส่งคำขอเบิกไม่สำเร็จ: ' + error.message : 'ส่งคำขอเบิกไม่ได้ขณะออฟไลน์ กรุณาลองใหม่เมื่อมีอินเทอร์เน็ต', 'err'); return; }
+  if (currentRole === 'hr') advReqs.push(advFromRow({ ...row, requested_at: new Date().toISOString() }));
+  const name = lvEmp.name;
+  closeLeaveDialog();
+  setStatus($('#kStatus'), 'ok', `✓ ส่งคำขอเบิก ${amount.toLocaleString('th-TH')} บาท ของ ${name} แล้ว รอ HR อนุมัติ`);
+  pauseUntil = Date.now() + 2500;
+  toast('ส่งคำขอเบิกเงินแล้ว รอ HR อนุมัติ', 'ok');
+  speak(`ส่งคำขอเบิกเงินแล้วค่ะ คุณ${name}`);
+  renderLeaveBadge();
+});
 $('#lvPick').addEventListener('click', showLeavePick);
 $('#lvSearch').addEventListener('input', renderLvPick);
 $('#lvPickOk').addEventListener('click', () => {
@@ -2808,7 +2913,7 @@ $('#lvPickOk').addEventListener('click', () => {
   const v = $('#kVideo');
   let snap = null;
   if (stream && v.videoWidth) { const side = Math.min(v.videoWidth, v.videoHeight) / 1.7; snap = snapshot(v, { x: (v.videoWidth - side) / 2, y: (v.videoHeight - side) / 2, width: side, height: side }); }
-  showLeaveForm(emp, snap, 'เลือกชื่อ (มีรูปจากกล้องให้ HR ตรวจ)');
+  showReqForm(emp, snap, 'เลือกชื่อ (มีรูปจากกล้องให้ HR ตรวจ)');
 });
 $('#lvCancel1').addEventListener('click', closeLeaveDialog);
 $('#lvCancel2').addEventListener('click', closeLeaveDialog);
@@ -2838,6 +2943,8 @@ $('#lvForm').addEventListener('submit', async ev => {
 function renderLeaveBadge() {
   const n = currentRole === 'hr' ? leaves.filter(l => l.status === 'pending').length : 0;
   $('#leaveBadge').hidden = !n; $('#leaveBadge').textContent = n;
+  const na = currentRole === 'hr' ? advReqs.filter(x => x.status === 'pending').length : 0;
+  $('#advBadge').hidden = !na; $('#advBadge').textContent = na;
 }
 const STATUS_BADGE = { pending: ['b-warn', 'รออนุมัติ'], approved: ['b-ok', 'อนุมัติแล้ว'], rejected: ['b-err', 'ไม่อนุมัติ'], cancelled: ['b-mute', 'ยกเลิก'] };
 function renderLeaves() {
