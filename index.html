@@ -169,6 +169,18 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 .sw{display:inline-block;width:14px;height:14px;border-radius:4px;border:1px solid var(--line)}
 .sw.work{background:var(--ok-bg)}.sw.off{background:var(--surface-2)}.sw.special{box-shadow:inset 0 0 0 2px var(--warn)}
 .cal-day .cnt{font-size:11px;font-weight:600;color:var(--accent)}
+.hist .cal-day{min-height:74px}
+.hist .cal-day.came{background:var(--ok-bg)}
+.hist .cal-day.miss{box-shadow:inset 0 0 0 2px var(--warn)}
+.hist .cal-day.lv{background:var(--info-bg)}
+.hist .cal-day.off{background:var(--surface-2)}
+.hist .cal-day.future{opacity:.45;cursor:default}
+.hist .cal-day .t{font-size:11.5px;line-height:1.35;font-variant-numeric:tabular-nums}
+.hist .cal-day .t.w{color:var(--warn);font-weight:600}
+.hist .cal-day .t.i{color:var(--info);font-weight:600}
+.hist .cal-day .t.m{color:var(--muted)}
+.sw.came{background:var(--ok-bg)}.sw.miss{box-shadow:inset 0 0 0 2px var(--warn)}.sw.lv{background:var(--info-bg)}
+@media (max-width:560px){.hist .cal-day{min-height:58px}.hist .cal-day .t{font-size:10px}}
 .paint{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
 .paint .btn{display:inline-flex;align-items:center;gap:6px}
 .paint .btn.active{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
@@ -407,7 +419,22 @@ textarea{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:
       </div>
       <p class="small muted" style="margin:6px 0 0">วันที่ย้ายหน้างาน แบ่งตามเวลาที่อยู่แต่ละหน้างาน · OT นับให้หน้างานสุดท้ายของวัน · ไม่รวมค่าจ้างวันลา/วันหยุดนักขัตฤกษ์ และยังไม่หักประกันสังคม</p>
     </div>
-    <div class="card">
+    <div class="card hist" style="margin-bottom:20px">
+      <h2>ประวัติรายคน — สแกนวันไหนบ้าง</h2>
+      <div class="toolbar">
+        <label class="f"><span>พนักงาน</span><select id="hEmp" style="min-width:220px"></select></label>
+        <button class="btn" id="hPrev" aria-label="เดือนก่อน">‹</button>
+        <label class="f"><span>เดือน</span><input type="month" id="hMonth"></label>
+        <button class="btn" id="hNext" aria-label="เดือนถัดไป">›</button>
+      </div>
+      <div class="stats" id="hStats"></div>
+      <div class="cal-grid" id="hGrid"></div>
+      <div class="legend small muted">
+        <span><i class="sw came"></i>มาทำงาน (เวลาเข้า–ออก)</span><span><i class="sw miss"></i>ไม่สแกนออก</span><span><i class="sw lv"></i>ลา</span><span><i class="sw off"></i>วันหยุดโรงงาน</span>
+        <span>คลิกวันที่ = ดูทุกครั้งที่สแกนวันนั้น (ด้านล่าง)</span>
+      </div>
+    </div>
+    <div class="card" id="dayCard">
       <h2>รายวัน</h2>
       <div class="toolbar">
         <label class="f"><span>วันที่</span><input type="date" id="rDate"></label>
@@ -1986,6 +2013,7 @@ const dayTypeBadge = info => `<span class="badge ${info.work ? 'b-ok' : 'b-mute'
 function renderReports() {
   renderPeriod();
   renderMonthSummary();
+  renderEmpHistory();
   const key = $('#rDate').value || dayKey(Date.now());
   needData([key.slice(0, 7)], key, renderReports);
   $('#rDayType').innerHTML = dayTypeBadge(dayInfo(key));
@@ -2069,6 +2097,59 @@ function renderMonthSummary() {
       + `<tr><td><b>รวม</b></td><td></td><td></td><td class="num"><b>${fmtBaht(sc.total)}</b></td><td></td></tr>`
     : '<tr><td colspan="5" class="empty">ยังไม่มีข้อมูลเดือนนี้</td></tr>';
 }
+/* ประวัติรายคน: เดือนนี้คนนี้สแกนวันไหนบ้าง (ไม่แสดงค่าแรง) */
+function renderEmpHistory() {
+  const sel = $('#hEmp');
+  const want = sel.value || store.get('histEmp', '');
+  sel.innerHTML = employees.map(e => `<option value="${e.id}">${esc(e.name)}${e.dept ? ` · ${esc(e.dept)}` : ''}</option>`).join('');
+  if (want && employees.some(e => e.id === want)) sel.value = want;
+  const emp = empById(sel.value);
+  const m = $('#hMonth').value || dayKey(Date.now()).slice(0, 7);
+  if (!emp) { $('#hGrid').innerHTML = '<div class="empty">ยังไม่มีพนักงาน</div>'; $('#hStats').innerHTML = ''; return; }
+  needData([m], null, renderEmpHistory);
+  const [y, mo] = m.split('-').map(Number), first = new Date(y, mo - 1, 1).getDay(), days = new Date(y, mo, 0).getDate(), today = dayKey(Date.now());
+  let html = DOW_SHORT.map(d => `<div class="dow">${d}</div>`).join('');
+  for (let i = 0; i < first; i++) html += '<div class="cal-day blank"></div>';
+  let came = 0, dayVal = 0, miss = 0, late = 0, lv = 0;
+  for (let d = 1; d <= days; d++) {
+    const key = `${m}-${pad(d)}`;
+    if (key > today) { html += `<div class="cal-day future"><span class="d">${d}</span></div>`; continue; }
+    const r = daySummary(emp, key);
+    const scans = r.evs.length;
+    let cls = '', body = '';
+    if (r.present) {
+      came++; dayVal += r.dayValue; if (r.missingOut) miss++; if (r.late) late++;
+      cls = 'came' + (r.missingOut ? ' miss' : '');
+      body = `<span class="t">เข้า ${hm(r.firstIn)}</span>`
+        + (r.lastOut ? `<span class="t">ออก ${hm(r.lastOut)}</span>` : `<span class="t w">${key === today ? 'ยังไม่ออก' : 'ไม่สแกนออก'}</span>`)
+        + (r.late ? `<span class="t w">สาย ${r.late} น.</span>` : '')
+        + (r.half ? `<span class="t i">ครึ่งวัน</span>` : '')
+        + (r.leave ? `<span class="t i">${esc(LEAVE_TYPES[r.leave.type])}${PART_LABEL[r.leave.part] && r.leave.part !== 'full' ? PART_LABEL[r.leave.part] : ''}</span>` : '');
+    } else if (r.leave) {
+      lv += r.leaveValue; cls = 'lv';
+      body = `<span class="t i">${esc(LEAVE_TYPES[r.leave.type])}${r.leave.part !== 'full' ? PART_LABEL[r.leave.part] : ''}</span>`;
+    } else if (!r.info.work) {
+      cls = 'off'; body = `<span class="t m">หยุด${r.info.note ? ' · ' + esc(r.info.note) : ''}</span>`;
+    } else {
+      body = scans ? `<span class="t w">มีสแกน ${scans} ครั้ง (ไม่มีเข้างาน)</span>` : '<span class="t m">—</span>';
+      if (scans) cls = 'miss';
+    }
+    if (r.present && r.leave) lv += r.leaveValue;
+    html += `<button type="button" class="cal-day ${cls}${key === today ? ' today' : ''}" data-hday="${key}" title="${esc(r.status)}"><span class="d">${d}</span>${body}</button>`;
+  }
+  $('#hGrid').innerHTML = html;
+  $('#hStats').innerHTML = statCards([['มาทำงาน', `${came} วัน${dayVal !== came ? ` (${fmtDays(dayVal)})` : ''}`], ['ไม่สแกนออก', miss ? `${miss} วัน` : '-'], ['มาสาย', late ? `${late} วัน` : '-'], ['ลา', lv ? `${fmtDays(lv)} วัน` : '-']]);
+}
+$('#hEmp').addEventListener('change', () => { store.set('histEmp', $('#hEmp').value); renderEmpHistory(); });
+$('#hMonth').addEventListener('change', renderEmpHistory);
+const histShift = n => { const [y, mo] = ($('#hMonth').value || dayKey(Date.now()).slice(0, 7)).split('-').map(Number); const d = new Date(y, mo - 1 + n, 1); $('#hMonth').value = `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; renderEmpHistory(); };
+$('#hPrev').addEventListener('click', () => histShift(-1));
+$('#hNext').addEventListener('click', () => histShift(1));
+$('#hGrid').addEventListener('click', e => {
+  const b = e.target.closest('[data-hday]'); if (!b) return;
+  $('#rDate').value = b.dataset.hday; renderReports();
+  $('#dayCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
 $('#rLog').addEventListener('click', async ev => {
   const b = ev.target.closest('[data-delev]'); if (!b) return;
   if (!confirm('ลบรายการลงเวลานี้?')) return;
@@ -2659,6 +2740,7 @@ function tick() {
 setInterval(tick, 1000); tick();
 $('#rDate').value = dayKey(Date.now());
 $('#rMonth').value = dayKey(Date.now()).slice(0, 7);
+$('#hMonth').value = dayKey(Date.now()).slice(0, 7);
 
 /* ---------- leave: request at the kiosk, approve in HR ---------- */
 let leaveIdentify = null, lvEmp = null, lvSnap = null;
