@@ -987,6 +987,24 @@ async function flushOutbox() {
   if (outbox.length && !lastSyncError) flushOutbox();
 }
 setInterval(flushOutbox, 20000);
+/* ข้อมูลสแกนวันนี้จากเซิร์ฟเวอร์ — มีหลายเครื่องสแกน ถ้าเครื่องนี้หลับ/เน็ตหลุด realtime จะพลาดรายการจากเครื่องอื่น
+   แล้วจะคิดว่ายังไม่เข้างาน (สแกนออกกลายเป็น "เข้างาน" ใหม่) · empId = ดึงเฉพาะคนนั้น · timeoutMs = รอไม่เกินเท่านี้ (เน็ตช้าก็ไปต่อ) */
+async function syncToday(empId, timeoutMs) {
+  if (!currentUser) return false;
+  const d = new Date(), from = new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString();
+  let q = sb.from('att_events').select('id,emp_id,time,type,score,live,source,station').gte('time', from).order('time');
+  if (empId) q = q.eq('emp_id', empId);
+  const run = Promise.resolve(q).then(({ data, error }) => {
+    if (error) throw error;
+    const rows = (data || []).map(evFromRow), keep = new Set(rows.map(e => e.id)), pend = new Set(outbox.map(r => r.id)), k = dayKey(Date.now());
+    /* รายการวันนี้ที่เซิร์ฟเวอร์ไม่มีแล้ว (HR ลบ) และไม่ได้รอส่งอยู่ = ลบออกจากเครื่องนี้ด้วย */
+    events = events.filter(e => dayKey(e.time) !== k || (empId && e.empId !== empId) || keep.has(e.id) || pend.has(e.id));
+    mergeEvents(rows); return true;
+  });
+  const p = timeoutMs ? Promise.race([run, new Promise(r => setTimeout(() => r(false), timeoutMs))]) : run;
+  return p.catch(() => false);
+}
+setInterval(() => { if (currentUser && !document.hidden && navigator.onLine) syncToday().then(ok => { if (ok) refreshView(); }); }, 60000);
 addEventListener('online', () => { flushOutbox(); if (bootedOffline && currentUser) { bootedOffline = false; reloadData().catch(() => { bootedOffline = true; }); } });
 function renderSync() {
   const el = $('#sync'); if (!el) return;
@@ -1045,7 +1063,7 @@ function subscribeRealtime() {
     .on('postgres_changes', { event: '*', schema: 'public', table: 'att_settings' }, p => {
       if (p.new?.data) { settings = { ...DEFAULTS, ...p.new.data, payroll: { ...DEFAULTS.payroll, ...(p.new.data.payroll || {}) } }; buildMatcher(); refreshView(); }
     })
-    .subscribe();
+    .subscribe(status => { if (status === 'SUBSCRIBED') syncToday().then(ok => { if (ok) refreshView(); }); });
 }
 
 /* ---------- ui helpers ---------- */
@@ -1729,7 +1747,7 @@ document.addEventListener('visibilitychange', () => {
     // screen off / app in background: release the camera cleanly instead of leaving it frozen
     if (kioskWanted) { stopKiosk(); stopCamera(); resumeKiosk = true; }
   } else if (resumeKiosk && currentUser && currentView === 'kiosk') {
-    resumeKiosk = false; startKiosk();
+    resumeKiosk = false; startKiosk(); syncToday().then(ok => { if (ok) refreshView(); });
   } else if (!document.hidden && kioskOn) requestWakeLock();
 });
 // Identify carefully, then ask: the name is shown and spoken, and only a head turn AFTER that records the scan.
@@ -1762,6 +1780,7 @@ $('#kNotMe').addEventListener('click', () => {
   $('#btnManual').click();
 });
 function handleKiosk(det, video) {
+  if (scanBusy) return;   /* กำลังเช็คข้อมูลกับเซิร์ฟเวอร์ก่อนบันทึก */
   const st = $('#kStatus'), canvas = $('#kCanvas'), now = Date.now();
   if (!det) {
     if (cand && now - cand.lastSeen < 1500) return;   // a frame or two without a face: keep going
@@ -1823,11 +1842,17 @@ function handleKiosk(det, video) {
   hideAsk();
   finishScan(emp, det, video);
 }
-function finishScan(emp, det, video) {
+let scanBusy = false;
+const hasInToday = id => { const k = dayKey(Date.now()); return events.some(e => e.empId === id && e.type === 'in' && dayKey(e.time) === k); };
+async function finishScan(emp, det, video) {
   if (leaveIdentify) { const cb = leaveIdentify; leaveIdentify = null; cand = null; cb(emp, snapshot(video, det.detection.box), 'ยืนยันด้วยใบหน้า'); return; }
-  const score = Math.round((1 - cand.dist) * 100);
-  const res = recordEvent(emp, { score, live: !!settings.liveness, source: 'face', snap: snapshot(video, det.detection.box) });
+  const score = Math.round((1 - cand.dist) * 100), snap = snapshot(video, det.detection.box);
   cand = null;
+  if (!hasInToday(emp.id) && navigator.onLine) {
+    scanBusy = true; setStatus($('#kStatus'), 'warn', 'กำลังตรวจข้อมูล…');
+    try { await syncToday(emp.id, 2500); } finally { scanBusy = false; }
+  }
+  const res = recordEvent(emp, { score, live: !!settings.liveness, source: 'face', snap });
   showResult(emp, res);
 }
 let stationTimer = null, stationPending = null;
@@ -2773,7 +2798,7 @@ $('#manualDlg').addEventListener('close', () => {
   const v = $('#kVideo');
   let snap = null;
   if (stream && v.videoWidth) { const side = Math.min(v.videoWidth, v.videoHeight) / 1.7; snap = snapshot(v, { x: (v.videoWidth - side) / 2, y: (v.videoHeight - side) / 2, width: side, height: side }); }
-  showResult(emp, recordEvent(emp, { source: 'manual', snap }));
+  (hasInToday(emp.id) || !navigator.onLine ? Promise.resolve() : syncToday(emp.id, 2500)).then(() => showResult(emp, recordEvent(emp, { source: 'manual', snap })));
 });
 $('#btnFull').addEventListener('click', () => {
   if (document.fullscreenElement) document.exitFullscreen(); else document.documentElement.requestFullscreen?.().catch(() => {});
